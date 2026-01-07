@@ -68,8 +68,11 @@ def _lazy_import_mortgage_models():
 def create_mortgage_application(user_id: str) -> Dict[str, Any]:
     """Create a new mortgage application for a user.
     
+    IMPORTANT: Use authenticated_user_id from the agent state for the user_id parameter.
+    Do NOT ask the user for their user_id - it's already available in the state.
+    
     Args:
-        user_id: UUID of the user creating the application
+        user_id: UUID of the user creating the application (use authenticated_user_id from state)
         
     Returns:
         Dictionary with application_id and status
