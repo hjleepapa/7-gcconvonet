@@ -342,11 +342,19 @@
                     document.getElementById('micButton').disabled = false;
                     showStatus(data.message, 'success');
                     
-                    // Emit ready signal after a short delay to ensure all event listeners are set up
+                    // Verify event listener is registered before sending client_ready
+                    console.log('🔍 Verifying agent_response event listener is registered...');
+                    const hasListener = socket._callbacks && socket._callbacks['$agent_response'];
+                    console.log('🔍 Event listener check:', hasListener ? '✅ Registered' : '❌ NOT REGISTERED');
+                    
+                    // Emit ready signal after a longer delay to ensure all event listeners are fully set up
+                    // Increased to 1.5 seconds to give more time for event listener registration
                     setTimeout(() => {
-                        console.log('✅ Client ready - emitting ready signal');
+                        console.log('✅ Client ready - emitting ready signal (session_id:', socket.id + ')');
+                        console.log('🔍 Socket connected:', socket.connected);
+                        console.log('🔍 Socket ID:', socket.id);
                         socket.emit('client_ready', { session_id: socket.id });
-                    }, 500);
+                    }, 1500); // Increased from 500ms to 1500ms
                 } else {
                     showStatus(data.message, 'error');
                 }
@@ -395,7 +403,11 @@
             });
             
             socket.on('agent_response', (data) => {
-                console.log('📨 agent_response event received:', data);
+                console.log('📨 ===== agent_response event received =====');
+                console.log('📨 Event received at:', new Date().toISOString());
+                console.log('📨 Socket ID:', socket.id);
+                console.log('📨 Socket connected:', socket.connected);
+                console.log('📨 Data received:', data);
                 console.log('📨 Full data object:', JSON.stringify(data, null, 2));
                 
                 if (data && data.success) {
@@ -408,6 +420,7 @@
                     }
                     
                     if (data.text) {
+                        console.log('📝 Adding text to transcript:', data.text.substring(0, 100) + '...');
                         addTranscript('agent', data.text);
                     } else {
                         console.warn('⚠️ No text in agent_response');
@@ -417,7 +430,13 @@
                     if (data.audio) {
                         console.log('🔊 Received audio response:', data.audio.length, 'chars');
                         console.log('🔊 Audio preview:', data.audio.substring(0, 100) + '...');
-                        playAudioResponse(data.audio);
+                        console.log('🔊 Calling playAudioResponse()...');
+                        try {
+                            playAudioResponse(data.audio);
+                            console.log('✅ playAudioResponse() called successfully');
+                        } catch (audioError) {
+                            console.error('❌ Error in playAudioResponse():', audioError);
+                        }
                     } else {
                         console.log('❌ No audio data in response');
                         // Even without audio, reset the button if we have text
@@ -427,12 +446,16 @@
                     }
                     
                     resetMicButton();
+                    console.log('✅ agent_response event processed successfully');
                 } else {
                     console.log('❌ Response failed or invalid:', data);
                     showStatus('Error getting response', 'error');
                     resetMicButton();
                 }
             });
+            
+            // Log when event listener is registered
+            console.log('✅ agent_response event listener registered');
             
             socket.on('error', (data) => {
                 showStatus(data.message, 'error');
