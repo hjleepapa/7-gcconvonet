@@ -489,6 +489,36 @@ def init_socketio(socketio_instance: SocketIO, app):
             }
         
         emit('connected', {'session_id': session_id})
+        
+        # Check for pending responses if user is already authenticated (reconnection scenario)
+        # This handles the case where client reconnects after disconnecting during TTS
+        try:
+            session_data = get_session(session_id)
+            if session_data and session_data.get('authenticated') == 'True':
+                user_id = session_data.get('user_id')
+                if user_id:
+                    import json
+                    redis_key = f"pending_response:{user_id}"
+                    if redis_manager.is_available():
+                        pending_data = redis_manager.redis_client.get(redis_key)
+                        if pending_data:
+                            pending_response = json.loads(pending_data)
+                            print(f"📬 Found pending response for reconnected user {user_id}, sending to session {session_id}", flush=True)
+                            
+                            # Send pending response to reconnected session
+                            socketio.emit('agent_response', {
+                                'success': True,
+                                'text': pending_response['text'],
+                                'audio': pending_response['audio'],
+                                'pending': True
+                            }, namespace='/voice', room=session_id)
+                            
+                            # Delete pending response after sending
+                            redis_manager.redis_client.delete(redis_key)
+                            print(f"✅ Pending response sent to reconnected session {session_id}", flush=True)
+                            sentry_capture_voice_event("pending_response_delivered_reconnect", session_id, user_id, details={"original_session": pending_response.get('original_session_id')})
+        except Exception as reconnect_pending_error:
+            print(f"⚠️ Error checking pending response on reconnect: {reconnect_pending_error}", flush=True)
     
     
     @socketio.on('disconnect', namespace='/voice')
@@ -1582,15 +1612,10 @@ def init_socketio(socketio_instance: SocketIO, app):
                                     print(f"⚠️ agent_response delivery failed to session {session_id} (client may have disconnected)", flush=True)
                                     sentry_capture_voice_event("agent_response_delivery_failed", session_id, session.get('user_id') if 'session' in locals() else None, details={"reason": "emit_callback_returned_false"})
                             
-                            emit_socketio.emit('agent_response', {
-                                'success': True,
-                                'text': agent_response,
-                                'audio': audio_base64
-                            }, namespace='/voice', room=session_id, callback=emit_callback)
-                            print(f"✅ agent_response event emitted to session {session_id} (Socket.IO will handle delivery)", flush=True)
-                            
-                            # If emit succeeded, clear any pending response for this user
-                            def clear_pending_on_success(success):
+                            # Enhanced callback that also clears pending response on success
+                            def enhanced_emit_callback(success):
+                                emit_callback(success)
+                                # Clear pending response if emit succeeded
                                 if success and user_id:
                                     try:
                                         import json
@@ -1601,32 +1626,12 @@ def init_socketio(socketio_instance: SocketIO, app):
                                     except Exception as clear_error:
                                         print(f"⚠️ Error clearing pending response: {clear_error}", flush=True)
                             
-                            # Update callback to also clear pending response
-                            original_callback = emit_callback
-                            def enhanced_callback(success):
-                                original_callback(success)
-                                clear_pending_on_success(success)
-                            
-                            # Re-emit with enhanced callback (Socket.IO doesn't support updating callback, so we'll clear in the original)
-                            # Actually, we can't change the callback after emit, so we'll clear pending in a separate check
-                            # Let's clear it after a short delay to ensure delivery
-                            import eventlet
-                            def clear_pending_delayed():
-                                eventlet.sleep(1.0)  # Wait 1 second for delivery
-                                if user_id:
-                                    try:
-                                        import json
-                                        redis_key = f"pending_response:{user_id}"
-                                        if redis_manager.is_available():
-                                            # Only clear if session still exists (response was delivered)
-                                            current_session = get_session(session_id)
-                                            if current_session:
-                                                redis_manager.redis_client.delete(redis_key)
-                                                print(f"🧹 Cleared pending response for user_id {user_id}", flush=True)
-                                    except Exception as clear_error:
-                                        pass  # Ignore errors in cleanup
-                            
-                            socketio.start_background_task(clear_pending_delayed)
+                            emit_socketio.emit('agent_response', {
+                                'success': True,
+                                'text': agent_response,
+                                'audio': audio_base64
+                            }, namespace='/voice', room=session_id, callback=enhanced_emit_callback)
+                            print(f"✅ agent_response event emitted to session {session_id} (Socket.IO will handle delivery)", flush=True)
                         except Exception as emit_error:
                             print(f"❌ Error during emit: {emit_error}", flush=True)
                             import traceback

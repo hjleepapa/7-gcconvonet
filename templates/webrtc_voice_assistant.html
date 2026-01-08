@@ -358,6 +358,10 @@
                 console.log('📨 agent_response event received:', data);
                 if (data.success) {
                     console.log('✅ Response success, text length:', data.text ? data.text.length : 0);
+                    if (data.pending) {
+                        console.log('📬 This is a pending response (client reconnected during TTS generation)');
+                        showStatus('Received response (reconnected)', 'success');
+                    }
                     addTranscript('agent', data.text);
                     
                     // Play audio response
