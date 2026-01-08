@@ -489,36 +489,6 @@ def init_socketio(socketio_instance: SocketIO, app):
             }
         
         emit('connected', {'session_id': session_id})
-        
-        # Check for pending responses if user is already authenticated (reconnection scenario)
-        # This handles the case where client reconnects after disconnecting during TTS
-        try:
-            session_data = get_session(session_id)
-            if session_data and session_data.get('authenticated') == 'True':
-                user_id = session_data.get('user_id')
-                if user_id:
-                    import json
-                    redis_key = f"pending_response:{user_id}"
-                    if redis_manager.is_available():
-                        pending_data = redis_manager.redis_client.get(redis_key)
-                        if pending_data:
-                            pending_response = json.loads(pending_data)
-                            print(f"📬 Found pending response for reconnected user {user_id}, sending to session {session_id}", flush=True)
-                            
-                            # Send pending response to reconnected session
-                            socketio.emit('agent_response', {
-                                'success': True,
-                                'text': pending_response['text'],
-                                'audio': pending_response['audio'],
-                                'pending': True
-                            }, namespace='/voice', room=session_id)
-                            
-                            # Delete pending response after sending
-                            redis_manager.redis_client.delete(redis_key)
-                            print(f"✅ Pending response sent to reconnected session {session_id}", flush=True)
-                            sentry_capture_voice_event("pending_response_delivered_reconnect", session_id, user_id, details={"original_session": pending_response.get('original_session_id')})
-        except Exception as reconnect_pending_error:
-            print(f"⚠️ Error checking pending response on reconnect: {reconnect_pending_error}", flush=True)
     
     
     @socketio.on('disconnect', namespace='/voice')
