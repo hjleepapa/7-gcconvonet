@@ -1707,7 +1707,26 @@ def init_socketio(socketio_instance: SocketIO, app):
                             # Client is connected, emit the response
                             print(f"📤 Emitting agent_response to session {session_id} in /voice namespace...", flush=True)
                             
-                            # Simplified callback - just log, don't rely on it for critical logic
+                            # CRITICAL: Store as pending BEFORE emitting as a safety net
+                            # Even if client is in room, they might disconnect before receiving the message
+                            # We'll clear it if callback confirms delivery
+                            if user_id:
+                                try:
+                                    import json
+                                    pending_response = {
+                                        'text': agent_response,
+                                        'audio': audio_base64,
+                                        'created_at': time.time(),
+                                        'original_session_id': session_id
+                                    }
+                                    redis_key = f"pending_response:{user_id}"
+                                    if redis_manager.is_available():
+                                        redis_manager.redis_client.setex(redis_key, 300, json.dumps(pending_response))
+                                        print(f"💾 Stored pending response as backup for user_id {user_id} (will clear if delivery confirmed)", flush=True)
+                                except Exception as store_error:
+                                    print(f"⚠️ Error storing pending response backup: {store_error}", flush=True)
+                            
+                            # Simplified callback - clear pending if delivery confirmed
                             def emit_callback(success):
                                 if success:
                                     print(f"✅ agent_response callback: delivered to session {session_id}", flush=True)
@@ -1723,22 +1742,7 @@ def init_socketio(socketio_instance: SocketIO, app):
                                             print(f"⚠️ Error clearing pending response: {clear_error}", flush=True)
                                 else:
                                     print(f"⚠️ agent_response callback: delivery failed to session {session_id}", flush=True)
-                                    # Store as pending if callback indicates failure
-                                    if user_id:
-                                        try:
-                                            import json
-                                            pending_response = {
-                                                'text': agent_response,
-                                                'audio': audio_base64,
-                                                'created_at': time.time(),
-                                                'original_session_id': session_id
-                                            }
-                                            redis_key = f"pending_response:{user_id}"
-                                            if redis_manager.is_available():
-                                                redis_manager.redis_client.setex(redis_key, 300, json.dumps(pending_response))
-                                                print(f"💾 Stored pending response for user_id {user_id} (callback returned False)", flush=True)
-                                        except Exception as store_error:
-                                            print(f"⚠️ Error storing pending response: {store_error}", flush=True)
+                                    # Pending response already stored before emit, so we're covered
                             
                             emit_socketio.emit('agent_response', {
                                 'success': True,
