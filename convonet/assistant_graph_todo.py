@@ -1,6 +1,8 @@
 import asyncio
 import logging
 import os
+import time
+import traceback
 from langchain_core.tools import BaseTool
 from langchain_core.messages import SystemMessage, ToolMessage
 from langchain_anthropic import ChatAnthropic
@@ -803,6 +805,13 @@ DO NOT respond with text like "I'll create..." - ACTUALLY CALL THE TOOL!
             try:
                 print(f"🔧 Tools node executing with {len(self.tools)} tools available")
                 
+                # Initialize tool execution tracker
+                from .tool_execution_viewer import create_tracker, get_tracker, ToolStatus
+                request_id = state.request_id or f"req_{int(time.time())}"
+                tracker = get_tracker(request_id)
+                if not tracker:
+                    tracker = create_tracker(request_id, state.authenticated_user_id)
+                
                 # Get the last message which should contain tool calls
                 last_message = state.messages[-1]
                 if not hasattr(last_message, 'tool_calls') or not last_message.tool_calls:
@@ -826,6 +835,9 @@ DO NOT respond with text like "I'll create..." - ACTUALLY CALL THE TOOL!
                         tool_args = tool_call.get('args', {})
                         tool_id = tool_call.get('id', f'tool_{len(tool_messages)}')
                         
+                        # Start tracking tool execution
+                        execution = tracker.start_tool(tool_name, tool_id, tool_args)
+                        
                         try:
                             # Find the tool by name
                             tool = None
@@ -842,6 +854,9 @@ DO NOT respond with text like "I'll create..." - ACTUALLY CALL THE TOOL!
                                         result = await asyncio.wait_for(tool.ainvoke(tool_args), timeout=tool_timeout)
                                     else:
                                         result = await asyncio.wait_for(asyncio.to_thread(tool.invoke, tool_args), timeout=tool_timeout)
+                                    
+                                    # Track successful completion
+                                    tracker.complete_tool(tool_id, result)
                                     print(f"✅ Tool {tool_name} completed successfully")
                                     return {
                                         'tool_call_id': tool_id,
@@ -849,12 +864,16 @@ DO NOT respond with text like "I'll create..." - ACTUALLY CALL THE TOOL!
                                         'status': 'success'
                                     }
                                 except asyncio.TimeoutError:
+                                    # Track timeout
+                                    tracker.timeout_tool(tool_id)
                                     return {
                                         'tool_call_id': tool_id,
                                         'content': "I'm sorry, the database operation timed out. Please try again.",
                                         'status': 'timeout'
                                     }
                             else:
+                                # Track tool not found error
+                                tracker.fail_tool(tool_id, f"Tool {tool_name} not found", "ToolNotFoundError")
                                 return {
                                     'tool_call_id': tool_id,
                                     'content': f"Tool {tool_name} not found",
@@ -863,11 +882,13 @@ DO NOT respond with text like "I'll create..." - ACTUALLY CALL THE TOOL!
                         except Exception as e:
                             error_str = str(e)
                             error_type = type(e).__name__
+                            stack_trace = traceback.format_exc()
+                            
+                            # Track failure
+                            tracker.fail_tool(tool_id, error_str, error_type, stack_trace)
+                            
                             print(f"❌ Tool {tool_name} error: {error_str}")
                             print(f"❌ Tool {tool_name} error type: {error_type}")
-                            
-                            # Log full traceback for debugging
-                            import traceback
                             print(f"❌ Tool {tool_name} full error traceback:")
                             traceback.print_exc()
                             
@@ -907,6 +928,9 @@ DO NOT respond with text like "I'll create..." - ACTUALLY CALL THE TOOL!
                     
                         print(f"🔧 Executing tool: {tool_name} (id: {tool_id}) with args: {tool_args}")
                         
+                        # Start tracking tool execution
+                        execution = tracker.start_tool(tool_name, tool_id, tool_args)
+                        
                         # Initialize result variable to avoid UnboundLocalError
                         result = None
                         
@@ -938,9 +962,14 @@ DO NOT respond with text like "I'll create..." - ACTUALLY CALL THE TOOL!
                                             result = await asyncio.wait_for(tool.ainvoke(tool_args), timeout=tool_timeout)
                                         else:
                                             result = await asyncio.wait_for(asyncio.to_thread(tool.invoke, tool_args), timeout=tool_timeout)
+                                        
+                                        # Track successful completion
+                                        tracker.complete_tool(tool_id, result)
                                         print(f"✅ Tool {tool_name} completed successfully")
                                         break  # Success, exit retry loop
                                     except asyncio.TimeoutError:
+                                        # Track timeout
+                                        tracker.timeout_tool(tool_id)
                                         result = "I'm sorry, the database operation timed out. Please try again."
                                         print(f"⏰ Tool {tool_name} timed out after {tool_timeout} seconds")
                                         break  # Timeout is not retryable
@@ -1056,7 +1085,13 @@ DO NOT respond with text like "I'll create..." - ACTUALLY CALL THE TOOL!
                                         if result is None:
                                             result = f"I encountered an error: {error_str[:200]}"
                                             break
+                                        
+                                        # Track failure if result is an error message
+                                        if result and ("error" in result.lower() or "sorry" in result.lower() or "issue" in result.lower()):
+                                            tracker.fail_tool(tool_id, error_str, error_type, traceback.format_exc())
                             else:
+                                # Track tool not found error
+                                tracker.fail_tool(tool_id, f"Tool {tool_name} not found", "ToolNotFoundError")
                                 result = f"Tool {tool_name} not found"
                                 print(f"⚠️ Tool {tool_name} not found in available tools")
                             
@@ -1075,8 +1110,13 @@ DO NOT respond with text like "I'll create..." - ACTUALLY CALL THE TOOL!
                         except Exception as e:
                             # Outer exception handler for tool execution
                             error_str = str(e)
+                            error_type = type(e).__name__
+                            stack_trace = traceback.format_exc()
+                            
+                            # Track failure
+                            tracker.fail_tool(tool_id, error_str, error_type, stack_trace)
+                            
                             print(f"❌ Outer exception for tool {tool_name}: {error_str}")
-                            import traceback
                             traceback.print_exc()
                             from langchain_core.messages import ToolMessage
                             tool_message = ToolMessage(
@@ -1110,6 +1150,9 @@ DO NOT respond with text like "I'll create..." - ACTUALLY CALL THE TOOL!
                 # Add tool messages to state - CRITICAL: Must be added in order
                 state.messages.extend(tool_messages)
                 print(f"✅ Added {len(tool_messages)} tool result messages to state")
+                
+                # Mark tracker as finished
+                tracker.finish()
                 return state
                 
             except Exception as e:

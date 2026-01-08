@@ -27,9 +27,10 @@ def tool_execution_dashboard():
 
 @tool_gui_bp.route('/api/trackers')
 def get_all_trackers():
-    """Get all active trackers"""
+    """Get all active trackers (from memory and Redis)"""
     trackers_data = []
     
+    # Get trackers from memory
     for request_id, tracker in _trackers.items():
         summary = tracker.get_summary()
         trackers_data.append({
@@ -46,8 +47,44 @@ def get_all_trackers():
             "end_time": tracker.end_time
         })
     
+    # Also load from Redis (if available)
+    try:
+        from .tool_execution_viewer import redis_manager, REDIS_AVAILABLE
+        if REDIS_AVAILABLE and redis_manager:
+            import json
+            # Get all tracker keys from Redis
+            tracker_keys = redis_manager.redis_client.keys("tool_tracker:*")
+            for key in tracker_keys:
+                request_id = key.decode('utf-8').replace("tool_tracker:", "")
+                # Skip if already in memory
+                if request_id in _trackers:
+                    continue
+                
+                # Load from Redis
+                tracker = get_tracker(request_id)
+                if tracker:
+                    summary = tracker.get_summary()
+                    trackers_data.append({
+                        "request_id": request_id,
+                        "user_id": tracker.user_id,
+                        "total_tools": summary["total_tools"],
+                        "successful": summary["successful"],
+                        "failed": summary["failed"],
+                        "timeout": summary["timeout"],
+                        "pending": summary["pending"],
+                        "all_successful": summary["all_successful"],
+                        "total_duration_ms": summary["total_duration_ms"],
+                        "start_time": tracker.start_time,
+                        "end_time": tracker.end_time
+                    })
+    except Exception as e:
+        print(f"⚠️ Error loading trackers from Redis: {e}")
+    
     # Sort by start_time (most recent first)
     trackers_data.sort(key=lambda x: x.get("start_time", 0), reverse=True)
+    
+    # Limit to last 100 trackers
+    trackers_data = trackers_data[:100]
     
     return jsonify({
         "success": True,
@@ -59,6 +96,7 @@ def get_all_trackers():
 @tool_gui_bp.route('/api/tracker/<request_id>')
 def get_tracker_details(request_id: str):
     """Get detailed information about a specific tracker"""
+    # Try to get from memory first, then Redis
     tracker = get_tracker(request_id)
     
     if not tracker:
@@ -72,6 +110,15 @@ def get_tracker_details(request_id: str):
     # Convert tool executions to JSON-serializable format
     tools_data = []
     for tool_id, execution in tracker.tools.items():
+        # Truncate large results/errors for UI display
+        result_str = str(execution.result) if execution.result is not None else None
+        if result_str and len(result_str) > 5000:
+            result_str = result_str[:5000] + "... (truncated)"
+        
+        error_str = execution.error
+        if error_str and len(error_str) > 5000:
+            error_str = error_str[:5000] + "... (truncated)"
+        
         tool_data = {
             "tool_id": tool_id,
             "tool_name": execution.tool_name,
@@ -80,8 +127,8 @@ def get_tracker_details(request_id: str):
             "end_time": execution.end_time,
             "duration_ms": execution.duration_ms,
             "arguments": execution.arguments,
-            "result": str(execution.result) if execution.result is not None else None,
-            "error": execution.error,
+            "result": result_str,
+            "error": error_str,
             "error_type": execution.error_type,
             "stack_trace": execution.stack_trace
         }
@@ -119,8 +166,26 @@ def get_tracker_summary(request_id: str):
 
 @tool_gui_bp.route('/api/stats')
 def get_overall_stats():
-    """Get overall statistics across all trackers"""
-    total_requests = len(_trackers)
+    """Get overall statistics across all trackers (from memory and Redis)"""
+    # Collect all trackers (memory + Redis)
+    all_trackers = list(_trackers.values())
+    
+    # Also load from Redis
+    try:
+        from .tool_execution_viewer import redis_manager, REDIS_AVAILABLE, get_tracker
+        if REDIS_AVAILABLE and redis_manager:
+            import json
+            tracker_keys = redis_manager.redis_client.keys("tool_tracker:*")
+            for key in tracker_keys:
+                request_id = key.decode('utf-8').replace("tool_tracker:", "")
+                if request_id not in _trackers:
+                    tracker = get_tracker(request_id)
+                    if tracker:
+                        all_trackers.append(tracker)
+    except Exception as e:
+        print(f"⚠️ Error loading trackers from Redis for stats: {e}")
+    
+    total_requests = len(all_trackers)
     total_tools = 0
     total_successful = 0
     total_failed = 0
@@ -131,7 +196,7 @@ def get_overall_stats():
     tool_name_success = {}
     tool_name_failed = {}
     
-    for tracker in _trackers.values():
+    for tracker in all_trackers:
         summary = tracker.get_summary()
         total_tools += summary["total_tools"]
         total_successful += summary["successful"]

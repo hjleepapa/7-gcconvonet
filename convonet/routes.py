@@ -1709,7 +1709,8 @@ async def _run_agent_async(
         customer_id="",
         authenticated_user_id=user_id,
         authenticated_user_name=user_name,
-        is_authenticated=bool(user_id)
+        is_authenticated=bool(user_id),
+        request_id=request_id  # Add request_id for tool execution tracking
     )
     
     # Use timestamped thread ID after errors to start fresh conversation

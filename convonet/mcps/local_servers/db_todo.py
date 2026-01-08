@@ -2359,5 +2359,57 @@ async def change_member_role(team_name: str, email: str, new_role: str) -> str:
     except Exception as e:
         return f"Error changing member role: {str(e)}"
 
+@mcp.tool()
+async def search_knowledge_base(query: str, top_k: int = 5) -> str:
+    """Search the knowledge base using RAG (Retrieval-Augmented Generation) for unstructured documents.
+    
+    This tool uses vector embeddings and semantic search to find relevant information from
+    the knowledge base, documentation, and other unstructured sources.
+    
+    Args:
+        query: The search query or question.
+        top_k: Number of results to return (default: 5).
+        
+    Returns:
+        Relevant documents and information from the knowledge base.
+    """
+    try:
+        # Import RAG service (lazy import to avoid circular dependencies)
+        import sys
+        import os
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+        
+        from convonet.rag_service import get_rag_service
+        
+        rag_service = get_rag_service()
+        if not rag_service:
+            return "⚠️ RAG service not available. Knowledge base search is not configured."
+        
+        # Perform retrieval
+        results = rag_service.retrieve(query, top_k=top_k)
+        
+        if not results:
+            return f"❌ No relevant documents found for query: '{query}'"
+        
+        # Format results
+        response = f"📚 Found {len(results)} relevant document(s) for: '{query}'\n\n"
+        
+        for i, result in enumerate(results, 1):
+            doc = result.document
+            title = doc.metadata.get('title', 'Untitled Document')
+            source = doc.metadata.get('source', 'unknown')
+            score = result.score
+            
+            response += f"### {i}. {title} (Relevance: {score:.2f})\n"
+            response += f"**Source**: {source}\n"
+            response += f"**Content**: {doc.content[:300]}...\n\n"
+        
+        return response
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return f"❌ Error searching knowledge base: {str(e)}"
+
 if __name__ == "__main__":
     mcp.run(transport="stdio")

@@ -370,6 +370,12 @@
                 </div>
                 <div class="stat-value" id="statSuccessRate">0%</div>
             </div>
+            <div class="stat-card info">
+                <div class="stat-label">
+                    <span class="stat-icon">📋</span>Total Requests
+                </div>
+                <div class="stat-value" id="statTotalRequests">0</div>
+            </div>
         </div>
         
         <div class="chart-container">
@@ -380,7 +386,19 @@
         <div class="trackers-list">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
                 <h2>Recent Requests</h2>
-                <button class="refresh-btn" onclick="loadTrackers()">🔄 Refresh</button>
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    <input type="text" id="searchInput" placeholder="Search by tool name, request ID, or user ID..." 
+                           style="padding: 8px 12px; border: 1px solid #e5e7eb; border-radius: 6px; font-size: 14px; width: 300px;"
+                           onkeyup="filterTrackers()">
+                    <select id="statusFilter" onchange="filterTrackers()" 
+                            style="padding: 8px 12px; border: 1px solid #e5e7eb; border-radius: 6px; font-size: 14px;">
+                        <option value="all">All Status</option>
+                        <option value="success">✅ Success</option>
+                        <option value="failed">❌ Failed</option>
+                        <option value="timeout">⏱️ Timeout</option>
+                    </select>
+                    <button class="refresh-btn" onclick="loadTrackers()">🔄 Refresh</button>
+                </div>
             </div>
             <div id="trackersList" class="loading">Loading trackers...</div>
         </div>
@@ -394,6 +412,7 @@
     <script>
         let chart = null;
         let selectedTrackerId = null;
+        let allTrackers = []; // Store all trackers for filtering
         
         // Load data on page load
         document.addEventListener('DOMContentLoaded', function() {
@@ -402,6 +421,83 @@
             setInterval(loadStats, 5000); // Refresh stats every 5 seconds
             setInterval(loadTrackers, 5000); // Refresh trackers every 5 seconds
         });
+        
+        function filterTrackers() {
+            const searchTerm = document.getElementById('searchInput').value.toLowerCase();
+            const statusFilter = document.getElementById('statusFilter').value;
+            const trackersList = document.getElementById('trackersList');
+            
+            const filtered = allTrackers.filter(tracker => {
+                // Search filter
+                const matchesSearch = !searchTerm || 
+                    tracker.request_id.toLowerCase().includes(searchTerm) ||
+                    (tracker.user_id && tracker.user_id.toLowerCase().includes(searchTerm)) ||
+                    (tracker.tool_names && tracker.tool_names.some(name => name.toLowerCase().includes(searchTerm)));
+                
+                // Status filter
+                const matchesStatus = statusFilter === 'all' ||
+                    (statusFilter === 'success' && tracker.all_successful) ||
+                    (statusFilter === 'failed' && !tracker.all_successful && tracker.failed > 0) ||
+                    (statusFilter === 'timeout' && tracker.timeout > 0);
+                
+                return matchesSearch && matchesStatus;
+            });
+            
+            displayTrackers(filtered);
+        }
+        
+        function displayTrackers(trackers) {
+            const trackersList = document.getElementById('trackersList');
+            
+            if (trackers.length === 0) {
+                trackersList.innerHTML = '<div class="loading">No trackers found matching your filters.</div>';
+                return;
+            }
+            
+            trackersList.innerHTML = trackers.map(tracker => {
+                const toolNames = tracker.tool_names || [];
+                return `
+                    <div class="tracker-item ${selectedTrackerId === tracker.request_id ? 'selected' : ''}" 
+                         onclick="selectTracker('${tracker.request_id}')">
+                        <div class="tracker-header">
+                            <div class="tracker-id">Request: ${tracker.request_id.substring(0, 20)}...</div>
+                            <div class="tracker-status ${tracker.all_successful ? 'success' : 'failed'}">
+                                ${tracker.all_successful ? '✅ All Success' : '❌ Some Failed'}
+                            </div>
+                        </div>
+                        <div class="tracker-stats">
+                            <div class="tracker-stat">
+                                <div class="tracker-stat-label">Total Tools</div>
+                                <div class="tracker-stat-value">${tracker.total_tools}</div>
+                            </div>
+                            <div class="tracker-stat">
+                                <div class="tracker-stat-label">✅ Successful</div>
+                                <div class="tracker-stat-value" style="color: #10b981;">${tracker.successful}</div>
+                            </div>
+                            <div class="tracker-stat">
+                                <div class="tracker-stat-label">❌ Failed</div>
+                                <div class="tracker-stat-value" style="color: #ef4444;">${tracker.failed}</div>
+                            </div>
+                            <div class="tracker-stat">
+                                <div class="tracker-stat-label">⏱️ Timeout</div>
+                                <div class="tracker-stat-value" style="color: #f59e0b;">${tracker.timeout}</div>
+                            </div>
+                            ${tracker.total_duration_ms ? `
+                            <div class="tracker-stat">
+                                <div class="tracker-stat-label">Duration</div>
+                                <div class="tracker-stat-value">${tracker.total_duration_ms.toFixed(0)}ms</div>
+                            </div>
+                            ` : ''}
+                        </div>
+                        ${toolNames.length > 0 ? `
+                        <div style="margin-top: 10px; font-size: 12px; color: #666;">
+                            <strong>Tools:</strong> ${toolNames.join(', ')}
+                        </div>
+                        ` : ''}
+                    </div>
+                `;
+            }).join('');
+        }
         
         async function loadStats() {
             try {
@@ -414,6 +510,7 @@
                     document.getElementById('statFailed').textContent = stats.total_failed;
                     document.getElementById('statTimeout').textContent = stats.total_timeout;
                     document.getElementById('statSuccessRate').textContent = stats.success_rate.toFixed(1) + '%';
+                    document.getElementById('statTotalRequests').textContent = stats.total_requests;
                     
                     // Update chart
                     updateChart(stats);
@@ -430,48 +527,15 @@
                 
                 if (data.success) {
                     const trackers = data.trackers;
-                    const trackersList = document.getElementById('trackersList');
                     
-                    if (trackers.length === 0) {
-                        trackersList.innerHTML = '<div class="loading">No trackers found. Tool executions will appear here.</div>';
-                        return;
-                    }
+                    // Extract tool names for each tracker
+                    trackers.forEach(tracker => {
+                        // We'll get tool names from the detailed view when needed
+                        tracker.tool_names = [];
+                    });
                     
-                    trackersList.innerHTML = trackers.map(tracker => `
-                        <div class="tracker-item ${selectedTrackerId === tracker.request_id ? 'selected' : ''}" 
-                             onclick="selectTracker('${tracker.request_id}')">
-                            <div class="tracker-header">
-                                <div class="tracker-id">Request: ${tracker.request_id}</div>
-                                <div class="tracker-status ${tracker.all_successful ? 'success' : 'failed'}">
-                                    ${tracker.all_successful ? '✅ All Success' : '❌ Some Failed'}
-                                </div>
-                            </div>
-                            <div class="tracker-stats">
-                                <div class="tracker-stat">
-                                    <div class="tracker-stat-label">Total Tools</div>
-                                    <div class="tracker-stat-value">${tracker.total_tools}</div>
-                                </div>
-                                <div class="tracker-stat">
-                                    <div class="tracker-stat-label">✅ Successful</div>
-                                    <div class="tracker-stat-value" style="color: #10b981;">${tracker.successful}</div>
-                                </div>
-                                <div class="tracker-stat">
-                                    <div class="tracker-stat-label">❌ Failed</div>
-                                    <div class="tracker-stat-value" style="color: #ef4444;">${tracker.failed}</div>
-                                </div>
-                                <div class="tracker-stat">
-                                    <div class="tracker-stat-label">⏱️ Timeout</div>
-                                    <div class="tracker-stat-value" style="color: #f59e0b;">${tracker.timeout}</div>
-                                </div>
-                                ${tracker.total_duration_ms ? `
-                                <div class="tracker-stat">
-                                    <div class="tracker-stat-label">Duration</div>
-                                    <div class="tracker-stat-value">${tracker.total_duration_ms.toFixed(0)}ms</div>
-                                </div>
-                                ` : ''}
-                            </div>
-                        </div>
-                    `).join('');
+                    allTrackers = trackers; // Store for filtering
+                    filterTrackers(); // Apply current filters
                 }
             } catch (error) {
                 console.error('Error loading trackers:', error);
@@ -494,6 +558,12 @@
                     const toolDetails = document.getElementById('toolDetails');
                     
                     toolDetails.classList.add('active');
+                    
+                    // Update tool names in allTrackers for filtering
+                    const tracker = allTrackers.find(t => t.request_id === requestId);
+                    if (tracker) {
+                        tracker.tool_names = tools.map(t => t.tool_name);
+                    }
                     
                     toolsList.innerHTML = tools.map(tool => `
                         <div class="tool-item">

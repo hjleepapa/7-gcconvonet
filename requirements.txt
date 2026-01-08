@@ -191,3 +191,8 @@ deepgram-sdk>=3.0.0
 
 # ElevenLabs SDK for TTS with voice cloning, emotions, and multilingual support
 elevenlabs>=1.0.0
+
+# RAG (Retrieval-Augmented Generation) dependencies
+chromadb>=0.4.0  # Vector database for embeddings
+sentence-transformers>=2.2.0  # Alternative embedding model
+cohere>=4.0.0  # Reranking model (optional)

@@ -103,21 +103,41 @@ class ToolExecutionTracker:
         """Mark a tool as completed"""
         if tool_id in self.tools:
             self.tools[tool_id].complete(result)
+            # Save to Redis after each tool completion
+            try:
+                _save_tracker_to_redis(self)
+            except:
+                pass
     
     def fail_tool(self, tool_id: str, error: str, error_type: Optional[str] = None, stack_trace: Optional[str] = None):
         """Mark a tool as failed"""
         if tool_id in self.tools:
             self.tools[tool_id].fail(error, error_type, stack_trace)
+            # Save to Redis after each tool failure
+            try:
+                _save_tracker_to_redis(self)
+            except:
+                pass
     
     def timeout_tool(self, tool_id: str):
         """Mark a tool as timed out"""
         if tool_id in self.tools:
             self.tools[tool_id].timeout()
+            # Save to Redis after each tool timeout
+            try:
+                _save_tracker_to_redis(self)
+            except:
+                pass
     
     def finish(self):
         """Mark the entire request as finished"""
         self.end_time = time.time()
         self.total_duration_ms = (self.end_time - self.start_time) * 1000
+        # Save to Redis when finished
+        try:
+            _save_tracker_to_redis(self)
+        except:
+            pass
     
     def get_summary(self) -> Dict[str, Any]:
         """Get summary of all tool executions"""
@@ -290,10 +310,109 @@ class ToolExecutionViewer:
 # Global tracker storage (for request tracking)
 _trackers: Dict[str, ToolExecutionTracker] = {}
 
+# Redis storage for persistence
+try:
+    from .redis_manager import get_redis_manager
+    redis_manager = get_redis_manager()
+    REDIS_AVAILABLE = redis_manager.is_available() if redis_manager else False
+except:
+    REDIS_AVAILABLE = False
+    redis_manager = None
+
+
+def _save_tracker_to_redis(tracker: ToolExecutionTracker):
+    """Save tracker to Redis for persistence"""
+    if not REDIS_AVAILABLE or not tracker.request_id:
+        return
+    
+    try:
+        import json
+        tracker_data = {
+            'request_id': tracker.request_id,
+            'user_id': tracker.user_id,
+            'start_time': tracker.start_time,
+            'end_time': tracker.end_time,
+            'total_duration_ms': tracker.total_duration_ms,
+            'tools': {}
+        }
+        
+        # Serialize tool executions
+        for tool_id, execution in tracker.tools.items():
+            tracker_data['tools'][tool_id] = {
+                'tool_name': execution.tool_name,
+                'tool_id': execution.tool_id,
+                'status': execution.status.value,
+                'start_time': execution.start_time,
+                'end_time': execution.end_time,
+                'duration_ms': execution.duration_ms,
+                'arguments': execution.arguments,
+                'result': str(execution.result) if execution.result is not None else None,
+                'error': execution.error,
+                'error_type': execution.error_type,
+                'stack_trace': execution.stack_trace
+            }
+        
+        # Store in Redis with 24 hour TTL
+        redis_key = f"tool_tracker:{tracker.request_id}"
+        redis_manager.redis_client.setex(redis_key, 86400, json.dumps(tracker_data))
+    except Exception as e:
+        print(f"⚠️ Failed to save tracker to Redis: {e}")
+
+
+def _load_tracker_from_redis(request_id: str) -> Optional[ToolExecutionTracker]:
+    """Load tracker from Redis"""
+    if not REDIS_AVAILABLE:
+        return None
+    
+    try:
+        import json
+        redis_key = f"tool_tracker:{request_id}"
+        data = redis_manager.redis_client.get(redis_key)
+        if not data:
+            return None
+        
+        tracker_data = json.loads(data)
+        tracker = ToolExecutionTracker(tracker_data['request_id'], tracker_data.get('user_id'))
+        tracker.start_time = tracker_data.get('start_time')
+        tracker.end_time = tracker_data.get('end_time')
+        tracker.total_duration_ms = tracker_data.get('total_duration_ms')
+        
+        # Restore tool executions
+        for tool_id, tool_data in tracker_data.get('tools', {}).items():
+            execution = ToolExecution(
+                tool_name=tool_data['tool_name'],
+                tool_id=tool_data['tool_id'],
+                arguments=tool_data.get('arguments', {})
+            )
+            execution.status = ToolStatus(tool_data['status'])
+            execution.start_time = tool_data.get('start_time')
+            execution.end_time = tool_data.get('end_time')
+            execution.duration_ms = tool_data.get('duration_ms')
+            execution.result = tool_data.get('result')
+            execution.error = tool_data.get('error')
+            execution.error_type = tool_data.get('error_type')
+            execution.stack_trace = tool_data.get('stack_trace')
+            tracker.tools[tool_id] = execution
+        
+        return tracker
+    except Exception as e:
+        print(f"⚠️ Failed to load tracker from Redis: {e}")
+        return None
+
 
 def get_tracker(request_id: str) -> Optional[ToolExecutionTracker]:
-    """Get a tracker by request ID"""
-    return _trackers.get(request_id)
+    """Get a tracker by request ID (checks memory first, then Redis)"""
+    # Check memory first
+    if request_id in _trackers:
+        return _trackers[request_id]
+    
+    # Try loading from Redis
+    tracker = _load_tracker_from_redis(request_id)
+    if tracker:
+        _trackers[request_id] = tracker  # Cache in memory
+        return tracker
+    
+    return None
 
 
 def create_tracker(request_id: Optional[str] = None, user_id: Optional[str] = None) -> ToolExecutionTracker:
@@ -301,6 +420,7 @@ def create_tracker(request_id: Optional[str] = None, user_id: Optional[str] = No
     tracker = ToolExecutionTracker(request_id, user_id)
     if tracker.request_id:
         _trackers[tracker.request_id] = tracker
+        _save_tracker_to_redis(tracker)  # Save to Redis immediately
     return tracker
 
 
