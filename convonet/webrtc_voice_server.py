@@ -497,8 +497,17 @@ def init_socketio(socketio_instance: SocketIO, app):
         session_id = request.sid
         print(f"❌ WebRTC client disconnected: {session_id}")
         
+        # Get user_id before deleting session (for pending response handling)
+        user_id = None
+        try:
+            session_data = get_session(session_id)
+            if session_data:
+                user_id = session_data.get('user_id')
+        except:
+            pass
+        
         # Capture disconnection event in Sentry
-        sentry_capture_voice_event("client_disconnected", session_id)
+        sentry_capture_voice_event("client_disconnected", session_id, user_id)
         set_transfer_flag(session_id, False)
         
         try:
@@ -518,6 +527,9 @@ def init_socketio(socketio_instance: SocketIO, app):
         except Exception as e:
             print(f"❌ Error deleting session: {e}")
             sentry_capture_redis_operation("delete_session", session_id, False, str(e))
+        
+        # Note: If there's a pending response being processed for this user_id,
+        # it will be stored when TTS completes and session is found to be gone
     
     
     @socketio.on('authenticate', namespace='/voice')
@@ -1583,18 +1595,47 @@ def init_socketio(socketio_instance: SocketIO, app):
                                     sentry_capture_voice_event("agent_response_delivery_failed", session_id, session.get('user_id') if 'session' in locals() else None, details={"reason": "emit_callback_returned_false"})
                             
                             # Enhanced callback that also clears pending response on success
+                            # Note: Socket.IO callbacks may not fire if client disconnects immediately
+                            # So we also use a delayed check to verify delivery
+                            callback_fired = {'fired': False, 'success': False}
+                            
                             def enhanced_emit_callback(success):
-                                emit_callback(success)
-                                # Clear pending response if emit succeeded
-                                if success and user_id:
-                                    try:
-                                        import json
-                                        redis_key = f"pending_response:{user_id}"
-                                        if redis_manager.is_available():
-                                            redis_manager.redis_client.delete(redis_key)
-                                            print(f"🧹 Cleared pending response for user_id {user_id} (response delivered)", flush=True)
-                                    except Exception as clear_error:
-                                        print(f"⚠️ Error clearing pending response: {clear_error}", flush=True)
+                                callback_fired['fired'] = True
+                                callback_fired['success'] = success
+                                print(f"📞 Emit callback FIRED: success={success} for session {session_id}", flush=True)
+                                
+                                if success:
+                                    print(f"✅ agent_response delivered successfully to session {session_id}", flush=True)
+                                    sentry_capture_voice_event("agent_response_delivered", session_id, user_id, details={"success": True})
+                                    # Clear pending response if emit succeeded
+                                    if user_id:
+                                        try:
+                                            import json
+                                            redis_key = f"pending_response:{user_id}"
+                                            if redis_manager.is_available():
+                                                redis_manager.redis_client.delete(redis_key)
+                                                print(f"🧹 Cleared pending response for user_id {user_id} (response delivered)", flush=True)
+                                        except Exception as clear_error:
+                                            print(f"⚠️ Error clearing pending response: {clear_error}", flush=True)
+                                else:
+                                    print(f"⚠️ agent_response delivery failed to session {session_id} (client may have disconnected)", flush=True)
+                                    sentry_capture_voice_event("agent_response_delivery_failed", session_id, user_id, details={"reason": "emit_callback_returned_false"})
+                                    # Store as pending if delivery failed
+                                    if user_id:
+                                        try:
+                                            import json
+                                            pending_response = {
+                                                'text': agent_response,
+                                                'audio': audio_base64,
+                                                'created_at': time.time(),
+                                                'original_session_id': session_id
+                                            }
+                                            redis_key = f"pending_response:{user_id}"
+                                            if redis_manager.is_available():
+                                                redis_manager.redis_client.setex(redis_key, 300, json.dumps(pending_response))
+                                                print(f"💾 Stored pending response for user_id {user_id} (delivery failed)", flush=True)
+                                        except Exception as store_error:
+                                            print(f"⚠️ Error storing pending response: {store_error}", flush=True)
                             
                             emit_socketio.emit('agent_response', {
                                 'success': True,
@@ -1602,6 +1643,35 @@ def init_socketio(socketio_instance: SocketIO, app):
                                 'audio': audio_base64
                             }, namespace='/voice', room=session_id, callback=enhanced_emit_callback)
                             print(f"✅ agent_response event emitted to session {session_id} (Socket.IO will handle delivery)", flush=True)
+                            
+                            # Also check after a delay if callback didn't fire (Socket.IO callbacks may not fire if client disconnects)
+                            import eventlet
+                            def delayed_delivery_check():
+                                eventlet.sleep(2.0)  # Wait 2 seconds for callback
+                                if not callback_fired['fired']:
+                                    print(f"⚠️ Emit callback did NOT fire for session {session_id} (client likely disconnected immediately)", flush=True)
+                                    # Store as pending since we can't confirm delivery
+                                    if user_id:
+                                        try:
+                                            import json
+                                            pending_response = {
+                                                'text': agent_response,
+                                                'audio': audio_base64,
+                                                'created_at': time.time(),
+                                                'original_session_id': session_id
+                                            }
+                                            redis_key = f"pending_response:{user_id}"
+                                            if redis_manager.is_available():
+                                                # Check if session still exists
+                                                current_session = get_session(session_id)
+                                                if not current_session:
+                                                    redis_manager.redis_client.setex(redis_key, 300, json.dumps(pending_response))
+                                                    print(f"💾 Stored pending response for user_id {user_id} (callback never fired, session gone)", flush=True)
+                                                    sentry_capture_voice_event("pending_response_stored_no_callback", session_id, user_id, details={"reason": "callback_never_fired"})
+                                        except Exception as store_error:
+                                            print(f"⚠️ Error storing pending response in delayed check: {store_error}", flush=True)
+                            
+                            socketio.start_background_task(delayed_delivery_check)
                         except Exception as emit_error:
                             print(f"❌ Error during emit: {emit_error}", flush=True)
                             import traceback
