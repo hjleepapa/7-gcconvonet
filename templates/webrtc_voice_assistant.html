@@ -280,6 +280,21 @@
                 socket.on('disconnect', (reason) => {
                     console.log('⚠️ Disconnected:', reason);
                     showStatus('Disconnected. Reconnecting...', 'error');
+                    // Clear processing state on disconnect
+                    if (isProcessing) {
+                        console.log('🔄 Clearing processing state due to disconnect');
+                        resetMicButton();
+                    }
+                });
+                
+                socket.on('reconnect', (attemptNumber) => {
+                    console.log('✅ Reconnected after', attemptNumber, 'attempts');
+                    showStatus('Reconnected! Ready to use.', 'success');
+                    // Clear processing state on reconnect
+                    if (isProcessing) {
+                        console.log('🔄 Clearing processing state due to reconnect');
+                        resetMicButton();
+                    }
                 });
             } catch (error) {
                 console.error('❌ Socket.IO initialization error:', error);
