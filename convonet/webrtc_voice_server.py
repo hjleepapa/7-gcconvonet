@@ -1663,15 +1663,19 @@ def init_socketio(socketio_instance: SocketIO, app):
                         
                         # Check if client is actually connected to Socket.IO room (more reliable than callback)
                         # Socket.IO automatically puts each client in a room with their session_id
+                        # A "room" in Socket.IO is a channel/group - when you emit to a room, all clients in that room receive the message
+                        # Each client is automatically in a room named after their session_id
                         client_actually_connected = False
                         try:
                             # Check if there are any clients in the room for this session
-                            # In Socket.IO, each client is in a room named after their session_id
-                            room_clients = emit_socketio.server.manager.get_participants('/voice', session_id)
+                            # get_participants() returns a generator, so we need to convert to list
+                            room_clients = list(emit_socketio.server.manager.get_participants('/voice', session_id))
                             client_actually_connected = len(room_clients) > 0
                             print(f"🔍 Socket.IO room check: {len(room_clients)} client(s) in room {session_id}, connected={client_actually_connected}", flush=True)
                         except Exception as room_check_error:
                             print(f"⚠️ Error checking Socket.IO room: {room_check_error}", flush=True)
+                            import traceback
+                            traceback.print_exc()
                             # If we can't check, assume connected (fallback to old behavior)
                             client_actually_connected = True
                         
