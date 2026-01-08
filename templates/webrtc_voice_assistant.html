@@ -341,6 +341,12 @@
                     document.getElementById('voiceSection').style.display = 'block';
                     document.getElementById('micButton').disabled = false;
                     showStatus(data.message, 'success');
+                    
+                    // Emit ready signal after a short delay to ensure all event listeners are set up
+                    setTimeout(() => {
+                        console.log('✅ Client ready - emitting ready signal');
+                        socket.emit('client_ready', { session_id: socket.id });
+                    }, 500);
                 } else {
                     showStatus(data.message, 'error');
                 }
