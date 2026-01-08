@@ -1543,7 +1543,23 @@ def init_socketio(socketio_instance: SocketIO, app):
                     session_still_exists = session_id in active_sessions
                 
                 # Get user_id for pending response storage
-                user_id = session.get('user_id') if 'session' in locals() else None
+                # session variable should be available from earlier in the function
+                user_id = None
+                try:
+                    if 'session' in locals() and session:
+                        user_id = session.get('user_id')
+                    else:
+                        # Try to get from Redis directly
+                        session_data = get_session(session_id)
+                        if session_data:
+                            user_id = session_data.get('user_id')
+                except Exception as user_id_error:
+                    print(f"⚠️ Error getting user_id for pending response: {user_id_error}", flush=True)
+                
+                if user_id:
+                    print(f"👤 Got user_id for pending response storage: {user_id}", flush=True)
+                else:
+                    print(f"⚠️ No user_id available for pending response storage (session_id: {session_id})", flush=True)
                 
                 if not session_still_exists:
                     print(f"⚠️ Session {session_id} no longer exists (client may have disconnected)", flush=True)
@@ -1651,6 +1667,7 @@ def init_socketio(socketio_instance: SocketIO, app):
                                 if not callback_fired['fired']:
                                     print(f"⚠️ Emit callback did NOT fire for session {session_id} (client likely disconnected immediately)", flush=True)
                                     # Store as pending since we can't confirm delivery
+                                    # We store it regardless of session state because callback not firing means we can't confirm delivery
                                     if user_id:
                                         try:
                                             import json
@@ -1662,14 +1679,24 @@ def init_socketio(socketio_instance: SocketIO, app):
                                             }
                                             redis_key = f"pending_response:{user_id}"
                                             if redis_manager.is_available():
-                                                # Check if session still exists
+                                                # Check if session still exists - if it does, we might have delivered but callback failed
+                                                # If it doesn't exist, definitely store as pending
                                                 current_session = get_session(session_id)
                                                 if not current_session:
+                                                    # Session is gone, definitely store as pending
                                                     redis_manager.redis_client.setex(redis_key, 300, json.dumps(pending_response))
                                                     print(f"💾 Stored pending response for user_id {user_id} (callback never fired, session gone)", flush=True)
-                                                    sentry_capture_voice_event("pending_response_stored_no_callback", session_id, user_id, details={"reason": "callback_never_fired"})
+                                                    sentry_capture_voice_event("pending_response_stored_no_callback", session_id, user_id, details={"reason": "callback_never_fired_session_gone"})
+                                                else:
+                                                    # Session still exists but callback didn't fire - could be Socket.IO issue
+                                                    # Store as pending anyway to be safe (will be cleared if client receives it)
+                                                    redis_manager.redis_client.setex(redis_key, 300, json.dumps(pending_response))
+                                                    print(f"💾 Stored pending response for user_id {user_id} (callback never fired, session exists - Socket.IO issue?)", flush=True)
+                                                    sentry_capture_voice_event("pending_response_stored_no_callback", session_id, user_id, details={"reason": "callback_never_fired_session_exists"})
                                         except Exception as store_error:
                                             print(f"⚠️ Error storing pending response in delayed check: {store_error}", flush=True)
+                                            import traceback
+                                            traceback.print_exc()
                             
                             socketio.start_background_task(delayed_delivery_check)
                         except Exception as emit_error:
