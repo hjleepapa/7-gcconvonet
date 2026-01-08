@@ -1477,33 +1477,59 @@ def init_socketio(socketio_instance: SocketIO, app):
                 # Send response to client
                 print(f"📤 Sending agent_response event to session {session_id}...", flush=True)
                 print(f"📤 Response text length: {len(agent_response)}, audio base64 length: {len(audio_base64)}", flush=True)
-                print(f"📤 socketio instance: {socketio}, type: {type(socketio)}", flush=True)
-                print(f"📤 socketio_instance_global: {socketio_instance_global if 'socketio_instance_global' in globals() else 'NOT SET'}, type: {type(socketio_instance_global) if 'socketio_instance_global' in globals() else 'N/A'}", flush=True)
-                try:
-                    # Use the global socketio instance
-                    emit_socketio = socketio if socketio else (socketio_instance_global if 'socketio_instance_global' in globals() else None)
-                    if not emit_socketio:
-                        raise Exception("socketio instance not available")
-                    
-                    emit_socketio.emit('agent_response', {
-                        'success': True,
-                        'text': agent_response,
-                        'audio': audio_base64
-                    }, namespace='/voice', room=session_id)
-                    print(f"✅ agent_response event emitted successfully to session {session_id}", flush=True)
-                except Exception as emit_error:
-                    print(f"❌ Error emitting agent_response: {emit_error}", flush=True)
-                    import traceback
-                    traceback.print_exc()
-                    # Try sending error to client
+                
+                # Check if session still exists before emitting
+                session_still_exists = False
+                if redis_manager.is_available():
+                    session_data = get_session(session_id)
+                    session_still_exists = session_data is not None
+                else:
+                    session_still_exists = session_id in active_sessions
+                
+                if not session_still_exists:
+                    print(f"⚠️ Session {session_id} no longer exists (client may have disconnected), skipping emit", flush=True)
+                    sentry_capture_voice_event("agent_response_skipped_session_gone", session_id, session.get('user_id') if 'session' in locals() else None, details={"reason": "session_no_longer_exists"})
+                else:
+                    print(f"✅ Session {session_id} still exists, proceeding with emit", flush=True)
                     try:
+                        # Use the global socketio instance
                         emit_socketio = socketio if socketio else (socketio_instance_global if 'socketio_instance_global' in globals() else None)
-                        if emit_socketio:
-                            emit_socketio.emit('error', {
-                                'message': f"Error sending response: {str(emit_error)}"
-                            }, namespace='/voice', room=session_id)
-                    except:
-                        pass
+                        if not emit_socketio:
+                            raise Exception("socketio instance not available")
+                        
+                        # Check if client is still in the room/namespace
+                        try:
+                            namespace = emit_socketio.server.namespace_handlers.get('/voice')
+                            if namespace:
+                                # Try to get the room to see if client is still connected
+                                room_clients = namespace.rooms.get(session_id, set())
+                                if not room_clients:
+                                    print(f"⚠️ No clients in room {session_id}, client may have disconnected", flush=True)
+                                    sentry_capture_voice_event("agent_response_skipped_no_clients", session_id, session.get('user_id') if 'session' in locals() else None)
+                                else:
+                                    print(f"✅ Found {len(room_clients)} client(s) in room {session_id}, emitting...", flush=True)
+                        except Exception as room_check_error:
+                            print(f"⚠️ Could not check room status: {room_check_error}, proceeding with emit anyway", flush=True)
+                        
+                        emit_socketio.emit('agent_response', {
+                            'success': True,
+                            'text': agent_response,
+                            'audio': audio_base64
+                        }, namespace='/voice', room=session_id)
+                        print(f"✅ agent_response event emitted successfully to session {session_id}", flush=True)
+                    except Exception as emit_error:
+                        print(f"❌ Error emitting agent_response: {emit_error}", flush=True)
+                        import traceback
+                        traceback.print_exc()
+                        # Try sending error to client
+                        try:
+                            emit_socketio = socketio if socketio else (socketio_instance_global if 'socketio_instance_global' in globals() else None)
+                            if emit_socketio:
+                                emit_socketio.emit('error', {
+                                    'message': f"Error sending response: {str(emit_error)}"
+                                }, namespace='/voice', room=session_id)
+                        except:
+                            pass
                 
                 sentry_capture_voice_event("audio_processing_completed", session_id, session.get('user_id'), details={"success": True})
             
