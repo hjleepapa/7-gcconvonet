@@ -313,11 +313,11 @@ _trackers: Dict[str, ToolExecutionTracker] = {}
 # Redis storage for persistence
 try:
     from .redis_manager import get_redis_manager
-    redis_manager = get_redis_manager()
-    REDIS_AVAILABLE = redis_manager.is_available() if redis_manager else False
+    _redis_manager = get_redis_manager()
+    REDIS_AVAILABLE = _redis_manager.is_available() if _redis_manager else False
 except:
     REDIS_AVAILABLE = False
-    redis_manager = None
+    _redis_manager = None
 
 
 def _save_tracker_to_redis(tracker: ToolExecutionTracker):
@@ -354,7 +354,7 @@ def _save_tracker_to_redis(tracker: ToolExecutionTracker):
         
         # Store in Redis with 24 hour TTL
         redis_key = f"tool_tracker:{tracker.request_id}"
-        redis_manager.redis_client.setex(redis_key, 86400, json.dumps(tracker_data))
+        _redis_manager.redis_client.setex(redis_key, 86400, json.dumps(tracker_data))
     except Exception as e:
         print(f"⚠️ Failed to save tracker to Redis: {e}")
 
@@ -367,7 +367,7 @@ def _load_tracker_from_redis(request_id: str) -> Optional[ToolExecutionTracker]:
     try:
         import json
         redis_key = f"tool_tracker:{request_id}"
-        data = redis_manager.redis_client.get(redis_key)
+        data = _redis_manager.redis_client.get(redis_key)
         if not data:
             return None
         

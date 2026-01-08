@@ -13,7 +13,9 @@ from .tool_execution_viewer import (
     ToolExecutionTracker,
     ToolStatus,
     _trackers,
-    get_tracker
+    get_tracker,
+    REDIS_AVAILABLE,
+    _redis_manager
 )
 
 tool_gui_bp = Blueprint('tool_gui', __name__, url_prefix='/tool-execution')
@@ -49,11 +51,11 @@ def get_all_trackers():
     
     # Also load from Redis (if available)
     try:
-        from .tool_execution_viewer import redis_manager, REDIS_AVAILABLE
-        if REDIS_AVAILABLE and redis_manager:
+        from .tool_execution_viewer import _redis_manager, REDIS_AVAILABLE
+        if REDIS_AVAILABLE and _redis_manager:
             import json
             # Get all tracker keys from Redis
-            tracker_keys = redis_manager.redis_client.keys("tool_tracker:*")
+            tracker_keys = _redis_manager.redis_client.keys("tool_tracker:*")
             for key in tracker_keys:
                 request_id = key.decode('utf-8').replace("tool_tracker:", "")
                 # Skip if already in memory
@@ -172,10 +174,10 @@ def get_overall_stats():
     
     # Also load from Redis
     try:
-        from .tool_execution_viewer import redis_manager, REDIS_AVAILABLE, get_tracker
-        if REDIS_AVAILABLE and redis_manager:
+        from .tool_execution_viewer import _redis_manager, REDIS_AVAILABLE, get_tracker
+        if REDIS_AVAILABLE and _redis_manager:
             import json
-            tracker_keys = redis_manager.redis_client.keys("tool_tracker:*")
+            tracker_keys = _redis_manager.redis_client.keys("tool_tracker:*")
             for key in tracker_keys:
                 request_id = key.decode('utf-8').replace("tool_tracker:", "")
                 if request_id not in _trackers:
