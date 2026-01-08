@@ -1543,23 +1543,30 @@ def init_socketio(socketio_instance: SocketIO, app):
                     session_still_exists = session_id in active_sessions
                 
                 # Get user_id for pending response storage
-                # session variable should be available from earlier in the function
+                # session variable should be available from earlier in the function (line ~1115)
                 user_id = None
                 try:
+                    # First try from session dict (created from Redis/memory session data)
                     if 'session' in locals() and session:
                         user_id = session.get('user_id')
-                    else:
-                        # Try to get from Redis directly
+                        print(f"👤 Got user_id from session dict: {user_id}", flush=True)
+                    
+                    # If not found, try to get from Redis directly
+                    if not user_id:
                         session_data = get_session(session_id)
                         if session_data:
                             user_id = session_data.get('user_id')
+                            print(f"👤 Got user_id from Redis session: {user_id}", flush=True)
                 except Exception as user_id_error:
                     print(f"⚠️ Error getting user_id for pending response: {user_id_error}", flush=True)
+                    import traceback
+                    traceback.print_exc()
                 
                 if user_id:
-                    print(f"👤 Got user_id for pending response storage: {user_id}", flush=True)
+                    print(f"✅ user_id available for pending response storage: {user_id}", flush=True)
                 else:
                     print(f"⚠️ No user_id available for pending response storage (session_id: {session_id})", flush=True)
+                    print(f"⚠️ Session dict: {session if 'session' in locals() else 'not in scope'}", flush=True)
                 
                 if not session_still_exists:
                     print(f"⚠️ Session {session_id} no longer exists (client may have disconnected)", flush=True)
