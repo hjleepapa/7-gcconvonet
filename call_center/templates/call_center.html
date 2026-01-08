@@ -182,7 +182,7 @@
         </div>
     </div>
 
-    <!-- Customer Popup Modal -->
+    <!-- Customer Popup Modal (with Accept Call button) -->
     <div id="customerPopup" class="modal">
         <div class="modal-content">
             <div class="modal-header">
@@ -201,6 +201,24 @@
                 <button class="btn btn-primary" id="acceptCallFromPopup">
                     <i class="fas fa-phone"></i> Accept Call
                 </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Customer Info Window (Read-only, persistent during call) -->
+    <div id="customerInfoWindow" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>
+                    <i class="fas fa-user"></i> 
+                    Customer Information
+                </h3>
+                <span class="close-modal" id="closeCustomerInfoWindow">&times;</span>
+            </div>
+            <div class="modal-body" id="customerInfoData">
+                <div class="customer-info loading">
+                    <i class="fas fa-spinner fa-spin"></i> Loading customer data...
+                </div>
             </div>
         </div>
     </div>

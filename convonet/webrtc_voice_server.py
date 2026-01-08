@@ -98,7 +98,10 @@ flask_app = None
 
 
 def build_customer_profile_from_session(session_data: dict | None) -> dict | None:
-    """Build a lightweight customer profile for the call center popup."""
+    """
+    Build a comprehensive customer profile for the call center popup.
+    Includes conversation history from LangGraph and activities from tool calls.
+    """
     if not session_data:
         return None
     
@@ -110,6 +113,8 @@ def build_customer_profile_from_session(session_data: dict | None) -> dict | Non
         "account_status": "Active",
         "tier": "Standard",
         "notes": "Captured from Convonet voice assistant",
+        "conversation_history": [],
+        "activities": []
     }
     
     user_id = session_data.get('user_id')
@@ -132,11 +137,114 @@ def build_customer_profile_from_session(session_data: dict | None) -> dict | Non
         except Exception as e:
             print(f"⚠️ Unable to load customer profile for call center: {e}")
     
+    # Retrieve conversation history from LangGraph
+    try:
+        from convonet.assistant_graph_todo import get_agent
+        from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
+        
+        thread_id = f"user-{user_id}" if user_id else None
+        if thread_id:
+            agent = get_agent(user_id=user_id, agent_type="todo")  # Default to todo agent
+            if agent and hasattr(agent, 'graph'):
+                config = {"configurable": {"thread_id": thread_id}}
+                try:
+                    state = agent.graph.get_state(config=config)
+                    if state and hasattr(state, 'values') and state.values:
+                        messages = state.values.get('messages', [])
+                        
+                        # Parse messages into conversation history
+                        conversation = []
+                        for msg in messages:
+                            if isinstance(msg, HumanMessage):
+                                conversation.append({
+                                    "role": "user",
+                                    "content": msg.content if hasattr(msg, 'content') else str(msg),
+                                    "timestamp": getattr(msg, 'timestamp', None)
+                                })
+                            elif isinstance(msg, AIMessage):
+                                content = msg.content if hasattr(msg, 'content') else str(msg)
+                                # Extract text from content (might be list of dicts)
+                                if isinstance(content, list):
+                                    text_parts = [part.get('text', '') for part in content if isinstance(part, dict) and part.get('type') == 'text']
+                                    content = ' '.join(text_parts) if text_parts else str(content)
+                                conversation.append({
+                                    "role": "assistant",
+                                    "content": content,
+                                    "timestamp": getattr(msg, 'timestamp', None)
+                                })
+                            elif isinstance(msg, ToolMessage):
+                                # Extract activities from tool calls
+                                tool_name = getattr(msg, 'name', None) or 'unknown_tool'
+                                tool_content = msg.content if hasattr(msg, 'content') else str(msg)
+                                
+                                # Parse tool content to extract activity info
+                                activity = {
+                                    "type": "tool_call",
+                                    "tool": tool_name,
+                                    "result": tool_content[:200] if isinstance(tool_content, str) else str(tool_content)[:200],  # Truncate long results
+                                    "timestamp": getattr(msg, 'timestamp', None)
+                                }
+                                
+                                # Identify specific activity types
+                                if 'calendar' in tool_name.lower() or 'event' in tool_name.lower():
+                                    activity["activity_type"] = "calendar_event"
+                                    try:
+                                        if isinstance(tool_content, str):
+                                            import json
+                                            result_data = json.loads(tool_content) if tool_content.startswith('{') else {}
+                                            if 'title' in result_data:
+                                                activity["title"] = result_data.get('title', '')
+                                            if 'event_from' in result_data or 'start' in result_data:
+                                                activity["date"] = result_data.get('event_from') or result_data.get('start', '')
+                                    except:
+                                        pass
+                                elif 'todo' in tool_name.lower():
+                                    activity["activity_type"] = "todo"
+                                    try:
+                                        if isinstance(tool_content, str):
+                                            import json
+                                            result_data = json.loads(tool_content) if tool_content.startswith('{') else {}
+                                            if 'title' in result_data or 'task' in result_data:
+                                                activity["title"] = result_data.get('title') or result_data.get('task', '')
+                                    except:
+                                        pass
+                                elif 'mortgage' in tool_name.lower():
+                                    activity["activity_type"] = "mortgage"
+                                    try:
+                                        if isinstance(tool_content, str):
+                                            import json
+                                            result_data = json.loads(tool_content) if tool_content.startswith('{') else {}
+                                            if 'application_id' in result_data:
+                                                activity["title"] = f"Mortgage Application {result_data.get('application_id', '')[:8]}"
+                                    except:
+                                        pass
+                                
+                                profile["activities"].append(activity)
+                        
+                        profile["conversation_history"] = conversation[-20:]  # Last 20 messages
+                        profile["activities"] = profile["activities"][-10:]  # Last 10 activities
+                        
+                except Exception as e:
+                    print(f"⚠️ Unable to retrieve LangGraph conversation history: {e}")
+    except Exception as e:
+        print(f"⚠️ Error building conversation history: {e}")
+    
     return profile
 
 
-def cache_call_center_profile(extension: str, session_data: dict | None):
-    """Store customer info in Redis so the call-center popup can display real data."""
+def cache_call_center_profile(extension: str, session_data: dict | None, call_sid: str = None, call_id: str = None):
+    """
+    Store customer info in Redis so the call-center popup can display real data.
+    
+    Uses unique cache keys with call_sid or call_id to prevent overwrites when multiple calls
+    from the same user transfer to the same extension.
+    
+    Args:
+        extension: Agent extension number
+        session_data: Session data containing user info
+        call_sid: Twilio Call SID (for Twilio calls)
+        call_id: Call ID (for WebRTC calls, typically session_id)
+    """
     if not extension or not REDIS_AVAILABLE or not redis_manager.is_available():
         return
     
@@ -145,12 +253,26 @@ def cache_call_center_profile(extension: str, session_data: dict | None):
         return
     
     profile["extension"] = extension
+    if call_sid:
+        profile["call_sid"] = call_sid
+    if call_id:
+        profile["call_id"] = call_id
+    
     try:
-        redis_manager.redis_client.setex(
-            f"callcenter:customer:{extension}",
-            300,  # expire after 5 minutes
-            json.dumps(profile)
-        )
+        # Store with unique key if call_sid or call_id provided
+        if call_sid:
+            unique_key = f"callcenter:customer:{extension}:{call_sid}"
+            redis_manager.redis_client.setex(unique_key, 300, json.dumps(profile))
+            print(f"💾 Cached customer profile with unique key: {unique_key}")
+        elif call_id:
+            unique_key = f"callcenter:customer:{extension}:{call_id}"
+            redis_manager.redis_client.setex(unique_key, 300, json.dumps(profile))
+            print(f"💾 Cached customer profile with unique key: {unique_key}")
+        
+        # Also store with extension-only key for backward compatibility (most recent call)
+        fallback_key = f"callcenter:customer:{extension}"
+        redis_manager.redis_client.setex(fallback_key, 300, json.dumps(profile))
+        print(f"💾 Cached customer profile with fallback key: {fallback_key}")
     except Exception as e:
         print(f"⚠️ Failed to cache call center profile: {e}")
 
@@ -257,6 +379,10 @@ def initiate_agent_transfer(session_id: str, extension: str, department: str, re
         print(f"📞 ✅ Initiated agent call via Twilio (Call SID: {agent_call.sid}) to {sip_target}")
         print(f"📞 Call status: {agent_call.status}")
         print(f"📞 Twilio will POST to: {transfer_url}")
+        
+        # Cache customer profile with call_sid after getting Call SID
+        if agent_call.sid and session_data:
+            cache_call_center_profile(extension, session_data, call_sid=agent_call.sid)
     except Exception as agent_error:
         message = f"Failed to originate agent call: {agent_error}"
         print(f"❌ {message}")
@@ -1261,7 +1387,8 @@ def init_socketio(socketio_instance: SocketIO, app):
                         "source": source
                     })
                     
-                    cache_call_center_profile(target_extension, session_record)
+                    # Cache customer profile with call_id=session_id for WebRTC calls
+                    cache_call_center_profile(target_extension, session_record, call_id=session_id)
                     
                     transfer_instructions = {
                         'extension': target_extension,

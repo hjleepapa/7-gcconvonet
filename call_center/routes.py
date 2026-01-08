@@ -354,23 +354,57 @@ def agent_status():
         'active_calls': [call.to_dict() for call in active_calls]
     })
 
-@call_center_bp.route('/api/customer/<customer_id>', methods=['GET'])
-def get_customer_data(customer_id):
-    """Get customer data for popup (prefer real data cached by the voice assistant)."""
+@call_center_bp.route('/api/customer/data', methods=['GET'])
+def get_customer_data():
+    """
+    Get customer data for popup (prefer real data cached by the voice assistant).
+    
+    Accepts query parameters:
+    - extension: Agent extension (required)
+    - call_sid: Twilio Call SID (optional, for unique lookup)
+    - call_id: Call ID (optional, for WebRTC calls)
+    - customer_id: Fallback customer ID (optional)
+    """
+    from flask import request
+    
+    extension = request.args.get('extension')
+    call_sid = request.args.get('call_sid')
+    call_id = request.args.get('call_id')
+    customer_id = request.args.get('customer_id')
+    
     profile = None
     agent_extension = None
     
-    agent_id = session.get('agent_id')
-    if agent_id:
-        agent = Agent.query.get(agent_id)
-        if agent:
-            agent_extension = agent.sip_extension or agent.agent_id
+    # Get agent extension from session if not provided
+    if not extension:
+        agent_id = session.get('agent_id')
+        if agent_id:
+            agent = Agent.query.get(agent_id)
+            if agent:
+                agent_extension = agent.sip_extension or agent.agent_id
+                extension = agent_extension
     
     if redis_manager and redis_manager.is_available():
         try:
             keys_to_try = []
+            
+            # Priority 1: Unique cache key with call_sid (if provided)
+            if extension and call_sid:
+                keys_to_try.append(f"callcenter:customer:{extension}:{call_sid}")
+            
+            # Priority 2: Unique cache key with call_id (if provided)
+            if extension and call_id:
+                keys_to_try.append(f"callcenter:customer:{extension}:{call_id}")
+            
+            # Priority 3: Extension-only key (backward compatibility, most recent call)
+            if extension:
+                keys_to_try.append(f"callcenter:customer:{extension}")
+            
+            # Priority 4: Customer ID key (fallback)
             if customer_id:
                 keys_to_try.append(f"callcenter:customer:{customer_id}")
+            
+            # Priority 5: Agent extension key (if different from customer_id)
             if agent_extension and agent_extension != customer_id:
                 keys_to_try.append(f"callcenter:customer:{agent_extension}")
             
@@ -378,19 +412,22 @@ def get_customer_data(customer_id):
             for cache_key in keys_to_try:
                 cached = redis_manager.redis_client.get(cache_key)
                 if cached:
+                    print(f"✅ Found customer profile in cache: {cache_key}")
                     break
             
             if cached:
                 profile = json.loads(cached)
         except Exception as e:
-            print(f"⚠️ Failed to read customer cache for {customer_id}: {e}")
+            print(f"⚠️ Failed to read customer cache: {e}")
+            import traceback
+            traceback.print_exc()
     
     if profile:
         return jsonify(profile)
     
     # Fallback mock data
     return jsonify({
-        'customer_id': customer_id,
+        'customer_id': customer_id or 'unknown',
         'name': 'John Doe',
         'email': 'john.doe@example.com',
         'phone': '+1234567890',
@@ -399,6 +436,8 @@ def get_customer_data(customer_id):
         'last_contact': '2025-10-10',
         'open_tickets': 2,
         'lifetime_value': '$5,420',
-        'notes': 'Preferred contact method: Email'
+        'notes': 'Preferred contact method: Email',
+        'conversation_history': [],
+        'activities': []
     })
 

@@ -101,6 +101,11 @@ class CallCenterAgent {
         this.closeCustomerPopup = document.getElementById('closeCustomerPopup');
         this.acceptCallFromPopup = document.getElementById('acceptCallFromPopup');
         
+        // Customer info window (read-only, persistent during call)
+        this.customerInfoWindow = document.getElementById('customerInfoWindow');
+        this.customerInfoData = document.getElementById('customerInfoData');
+        this.closeCustomerInfoWindow = document.getElementById('closeCustomerInfoWindow');
+        
         // Audio
         this.ringTone = document.getElementById('ringTone');
         this.remoteAudio = document.getElementById('remoteAudio');
@@ -149,8 +154,17 @@ class CallCenterAgent {
         this.closeCustomerPopup.addEventListener('click', () => this.hideCustomerPopup());
         this.acceptCallFromPopup.addEventListener('click', () => {
             this.hideCustomerPopup();
+            this.showCustomerInfoWindow(); // Open info window when accepting call
             this.answerCall();
         });
+        
+        // Customer info window
+        if (this.closeCustomerInfoWindow) {
+            this.closeCustomerInfoWindow.addEventListener('click', () => this.hideCustomerInfoWindow());
+        }
+        
+        // Initialize drag and resize functionality
+        this.initModalDragAndResize();
     }
     
     async handleLogin(e) {
@@ -620,8 +634,13 @@ class CallCenterAgent {
         // Update UI
         this.showIncomingCall(callerName, callerNumber);
         
-        // Show customer popup
-        this.showCustomerPopup(customerId);
+        // Extract call identifiers from session
+        const identity = this.extractSessionIdentity(session);
+        const callId = identity.callId;
+        const callSid = identity.twilioCallSid;
+        
+        // Show customer popup with call identifiers
+        this.showCustomerPopup(customerId, callSid, callId);
         
         // Play ringtone
         this.ringTone.play();
@@ -902,68 +921,130 @@ class CallCenterAgent {
         }
     }
     
-    async showCustomerPopup(customerId) {
+    async showCustomerPopup(customerId, callSid = null, callId = null) {
         this.customerPopup.classList.add('active');
         this.customerData.innerHTML = '<div class="customer-info loading"><i class="fas fa-spinner fa-spin"></i> Loading customer data...</div>';
         
         try {
-            const response = await fetch(`/call-center/api/customer/${customerId}`);
+            // Build query parameters
+            const params = new URLSearchParams();
+            if (this.agent && this.agent.sip_extension) {
+                params.append('extension', this.agent.sip_extension);
+            }
+            if (callSid) {
+                params.append('call_sid', callSid);
+            }
+            if (callId) {
+                params.append('call_id', callId);
+            }
+            if (customerId) {
+                params.append('customer_id', customerId);
+            }
+            
+            const response = await fetch(`/call-center/api/customer/data?${params.toString()}`);
             const customer = await response.json();
             
-            this.displayCustomerData(customer);
+            this.displayCustomerData(customer, this.customerData);
+            
+            // Store customer data for info window
+            this.currentCustomerData = customer;
+            this.currentCallSid = callSid;
+            this.currentCallId = callId;
         } catch (error) {
             console.error('Fetch customer data error:', error);
             this.customerData.innerHTML = '<div class="customer-info"><p>Failed to load customer data</p></div>';
         }
     }
     
-    displayCustomerData(customer) {
+    displayCustomerData(customer, containerElement) {
+        // Build conversation history HTML
+        let conversationHtml = '';
+        if (customer.conversation_history && customer.conversation_history.length > 0) {
+            conversationHtml = '<div class="conversation-section"><h4>Conversation History</h4><div class="conversation-list">';
+            customer.conversation_history.forEach(msg => {
+                const roleClass = msg.role === 'user' ? 'user-message' : 'assistant-message';
+                conversationHtml += `<div class="conversation-item ${roleClass}">
+                    <span class="role-badge">${msg.role === 'user' ? '👤 User' : '🤖 Assistant'}</span>
+                    <div class="message-content">${this.escapeHtml(msg.content)}</div>
+                </div>`;
+            });
+            conversationHtml += '</div></div>';
+        }
+        
+        // Build activities HTML
+        let activitiesHtml = '';
+        if (customer.activities && customer.activities.length > 0) {
+            activitiesHtml = '<div class="activities-section"><h4>Recent Activities</h4><div class="activities-list">';
+            customer.activities.forEach(activity => {
+                const activityIcon = activity.activity_type === 'calendar_event' ? '📅' : 
+                                   activity.activity_type === 'todo' ? '✅' : 
+                                   activity.activity_type === 'mortgage' ? '🏠' : '🔧';
+                activitiesHtml += `<div class="activity-item">
+                    <span class="activity-icon">${activityIcon}</span>
+                    <div class="activity-content">
+                        <div class="activity-title">${this.escapeHtml(activity.title || activity.tool || 'Activity')}</div>
+                        <div class="activity-details">${this.escapeHtml(activity.result || '')}</div>
+                    </div>
+                </div>`;
+            });
+            activitiesHtml += '</div></div>';
+        }
+        
         const html = `
             <div class="customer-info">
                 <div class="customer-field">
                     <label>Customer ID:</label>
-                    <span>${customer.customer_id}</span>
+                    <span>${this.escapeHtml(customer.customer_id || 'N/A')}</span>
                 </div>
                 <div class="customer-field">
                     <label>Name:</label>
-                    <span>${customer.name}</span>
+                    <span>${this.escapeHtml(customer.name || 'N/A')}</span>
                 </div>
                 <div class="customer-field">
                     <label>Email:</label>
-                    <span>${customer.email}</span>
+                    <span>${this.escapeHtml(customer.email || 'N/A')}</span>
                 </div>
                 <div class="customer-field">
                     <label>Phone:</label>
-                    <span>${customer.phone}</span>
+                    <span>${this.escapeHtml(customer.phone || 'N/A')}</span>
                 </div>
                 <div class="customer-field">
                     <label>Account Status:</label>
-                    <span>${customer.account_status}</span>
+                    <span>${this.escapeHtml(customer.account_status || 'N/A')}</span>
                 </div>
                 <div class="customer-field">
                     <label>Tier:</label>
-                    <span>${customer.tier}</span>
+                    <span>${this.escapeHtml(customer.tier || 'N/A')}</span>
                 </div>
-                <div class="customer-field">
+                ${customer.last_contact ? `<div class="customer-field">
                     <label>Last Contact:</label>
-                    <span>${customer.last_contact}</span>
-                </div>
-                <div class="customer-field">
+                    <span>${this.escapeHtml(customer.last_contact)}</span>
+                </div>` : ''}
+                ${customer.open_tickets ? `<div class="customer-field">
                     <label>Open Tickets:</label>
                     <span>${customer.open_tickets}</span>
-                </div>
-                <div class="customer-field">
+                </div>` : ''}
+                ${customer.lifetime_value ? `<div class="customer-field">
                     <label>Lifetime Value:</label>
-                    <span>${customer.lifetime_value}</span>
-                </div>
-                <div class="customer-field">
+                    <span>${this.escapeHtml(customer.lifetime_value)}</span>
+                </div>` : ''}
+                ${customer.notes ? `<div class="customer-field">
                     <label>Notes:</label>
-                    <span>${customer.notes}</span>
-                </div>
+                    <span>${this.escapeHtml(customer.notes)}</span>
+                </div>` : ''}
+                ${conversationHtml}
+                ${activitiesHtml}
             </div>
         `;
         
-        this.customerData.innerHTML = html;
+        containerElement.innerHTML = html;
+    }
+    
+    escapeHtml(text) {
+        if (!text) return '';
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
     }
     
     hideCustomerPopup() {
@@ -1043,6 +1124,11 @@ class CallCenterAgent {
                 <div class="call-duration" id="callDuration">00:00:00</div>
             </div>
         `;
+        
+        // Open customer info window if not already open
+        if (!this.customerInfoWindow || !this.customerInfoWindow.classList.contains('active')) {
+            this.showCustomerInfoWindow();
+        }
     }
     
     onCallEnded() {
@@ -1066,12 +1152,18 @@ class CallCenterAgent {
             this.acceptCallFromPopup.disabled = false;
         }
         
+        // Close customer info window when call ends
+        this.hideCustomerInfoWindow();
+        
         this.currentCall = null;
         this.currentSession = null;
         this.pendingDialNumber = null;
         this.answerInProgress = false;
         this.activeCallSessionId = null;
         this.activeCallIdentity = null;
+        this.currentCustomerData = null;
+        this.currentCallSid = null;
+        this.currentCallId = null;
         
         this.setReady();
     }
@@ -1146,6 +1238,96 @@ class CallCenterAgent {
             clearInterval(this.statusTimer);
             this.statusTimer = null;
         }
+    }
+    
+    async showCustomerInfoWindow() {
+        if (!this.customerInfoWindow) {
+            console.warn('Customer info window element not found');
+            return;
+        }
+        
+        this.customerInfoWindow.classList.add('active');
+        
+        // If we have stored customer data, display it
+        if (this.currentCustomerData) {
+            this.displayCustomerData(this.currentCustomerData, this.customerInfoData);
+        } else {
+            // Otherwise, fetch it
+            this.customerInfoData.innerHTML = '<div class="customer-info loading"><i class="fas fa-spinner fa-spin"></i> Loading customer data...</div>';
+            
+            try {
+                const params = new URLSearchParams();
+                if (this.agent && this.agent.sip_extension) {
+                    params.append('extension', this.agent.sip_extension);
+                }
+                if (this.currentCallSid) {
+                    params.append('call_sid', this.currentCallSid);
+                }
+                if (this.currentCallId) {
+                    params.append('call_id', this.currentCallId);
+                }
+                
+                const response = await fetch(`/call-center/api/customer/data?${params.toString()}`);
+                const customer = await response.json();
+                
+                this.displayCustomerData(customer, this.customerInfoData);
+                this.currentCustomerData = customer;
+            } catch (error) {
+                console.error('Fetch customer data error:', error);
+                this.customerInfoData.innerHTML = '<div class="customer-info"><p>Failed to load customer data</p></div>';
+            }
+        }
+    }
+    
+    hideCustomerInfoWindow() {
+        if (this.customerInfoWindow) {
+            this.customerInfoWindow.classList.remove('active');
+        }
+    }
+    
+    initModalDragAndResize() {
+        // Make modals draggable
+        const modals = [this.customerPopup, this.customerInfoWindow].filter(m => m);
+        
+        modals.forEach(modal => {
+            const header = modal.querySelector('.modal-header');
+            if (!header) return;
+            
+            let isDragging = false;
+            let currentX = 0;
+            let currentY = 0;
+            let initialX = 0;
+            let initialY = 0;
+            
+            header.addEventListener('mousedown', (e) => {
+                if (e.target.classList.contains('close-modal')) return;
+                
+                isDragging = true;
+                initialX = e.clientX - currentX;
+                initialY = e.clientY - currentY;
+                
+                const rect = modal.getBoundingClientRect();
+                currentX = rect.left;
+                currentY = rect.top;
+            });
+            
+            document.addEventListener('mousemove', (e) => {
+                if (!isDragging) return;
+                
+                e.preventDefault();
+                currentX = e.clientX - initialX;
+                currentY = e.clientY - initialY;
+                
+                modal.style.left = currentX + 'px';
+                modal.style.top = currentY + 'px';
+                modal.style.right = 'auto';
+                modal.style.bottom = 'auto';
+            });
+            
+            document.addEventListener('mouseup', () => {
+                isDragging = false;
+            });
+        });
     }
     
     updateSIPStatus(connected) {
