@@ -607,8 +607,10 @@ class CallCenterAgent {
         const callerNumber = remoteIdentity.uri.user;
         const callerName = remoteIdentity.display_name || callerNumber;
         
-        // Generate call ID
-        const callId = session.id;
+        // Extract call identifiers from session
+        const identity = this.extractSessionIdentity(session);
+        const callId = identity.callId || session.id; // Use identity.callId if available, fallback to session.id
+        const callSid = identity.twilioCallSid;
         
         // Mock customer data (in production, fetch from CRM)
         const customerId = callerNumber;
@@ -633,11 +635,6 @@ class CallCenterAgent {
         
         // Update UI
         this.showIncomingCall(callerName, callerNumber);
-        
-        // Extract call identifiers from session
-        const identity = this.extractSessionIdentity(session);
-        const callId = identity.callId;
-        const callSid = identity.twilioCallSid;
         
         // Show customer popup with call identifiers
         this.showCustomerPopup(customerId, callSid, callId);
