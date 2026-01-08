@@ -402,13 +402,19 @@
                 }
             });
             
-            socket.on('agent_response', (data) => {
+            socket.on('agent_response', (data, callback) => {
                 console.log('📨 ===== agent_response event received =====');
                 console.log('📨 Event received at:', new Date().toISOString());
                 console.log('📨 Socket ID:', socket.id);
                 console.log('📨 Socket connected:', socket.connected);
                 console.log('📨 Data received:', data);
                 console.log('📨 Full data object:', JSON.stringify(data, null, 2));
+                
+                // Acknowledge receipt immediately
+                if (callback && typeof callback === 'function') {
+                    console.log('✅ Sending acknowledgment to server');
+                    callback({ received: true, session_id: socket.id });
+                }
                 
                 if (data && data.success) {
                     console.log('✅ Response success, text length:', data.text ? data.text.length : 0);

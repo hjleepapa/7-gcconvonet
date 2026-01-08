@@ -856,7 +856,57 @@ def init_socketio(socketio_instance: SocketIO, app):
                                             'user_id': str(user.id),
                                             'original_session_id': pending_response.get('original_session_id')
                                         }
-                                        print(f"💾 Stored pending response info for session {session_id}, waiting for client_ready signal", flush=True)
+                                        print(f"💾 Stored pending response info for session {session_id}", flush=True)
+                                        
+                                        # Send immediately on authentication (don't wait for client_ready)
+                                        # The client might disconnect quickly, so send ASAP
+                                        def send_pending_response_immediate():
+                                            import eventlet
+                                            # Small delay to ensure authentication is complete
+                                            eventlet.sleep(0.3)
+                                            
+                                            # Check if session still exists
+                                            current_session = get_session(session_id)
+                                            if not current_session:
+                                                print(f"⚠️ Session {session_id} no longer exists for immediate send", flush=True)
+                                                return
+                                            
+                                            # Check if client is in room
+                                            try:
+                                                participants = list(socketio.server.manager.get_participants('/voice', session_id))
+                                                if not participants or len(participants) == 0:
+                                                    print(f"⚠️ Client not in room for immediate send to session {session_id}", flush=True)
+                                                    return
+                                            except Exception as room_error:
+                                                print(f"⚠️ Error checking room for immediate send: {room_error}", flush=True)
+                                                return
+                                            
+                                            print(f"📤 Sending pending response IMMEDIATELY on authentication (session {session_id})", flush=True)
+                                            
+                                            def immediate_delivery_callback(ack_data):
+                                                if ack_data and ack_data.get('received'):
+                                                    print(f"✅ Immediate pending response delivery confirmed for session {session_id}", flush=True)
+                                                    try:
+                                                        if redis_manager.is_available():
+                                                            redis_manager.redis_client.delete(redis_key)
+                                                        if hasattr(socketio, '_pending_responses') and session_id in socketio._pending_responses:
+                                                            del socketio._pending_responses[session_id]
+                                                        print(f"✅ Pending response cleared (immediate send) for user {user.id}", flush=True)
+                                                        sentry_capture_voice_event("pending_response_delivered", session_id, str(user.id), details={"original_session": pending_response.get('original_session_id'), "method": "immediate_auth"})
+                                                    except Exception as cleanup_error:
+                                                        print(f"⚠️ Error cleaning up: {cleanup_error}", flush=True)
+                                                else:
+                                                    print(f"⚠️ Immediate send delivery NOT confirmed (ack_data: {ack_data})", flush=True)
+                                            
+                                            socketio.emit('agent_response', {
+                                                'success': True,
+                                                'text': pending_response['text'],
+                                                'audio': pending_response['audio'],
+                                                'pending': True
+                                            }, namespace='/voice', room=session_id, callback=immediate_delivery_callback)
+                                        
+                                        socketio.start_background_task(send_pending_response_immediate)
+                                        print(f"💾 Also waiting for client_ready signal as backup", flush=True)
                                         
                                         # Also send with a fallback delay in case client_ready is not received
                                         def send_pending_response_fallback():
@@ -1041,10 +1091,11 @@ def init_socketio(socketio_instance: SocketIO, app):
                 print(f"⚠️ Error checking Socket.IO room: {room_check_error}", flush=True)
                 # Continue anyway, but log the error
             
-            # Send the pending response with callback to verify delivery
+            # Send the pending response with acknowledgment callback
             def delivery_callback(ack_data):
-                if ack_data:
-                    print(f"✅ Pending response delivery confirmed by client for session {session_id}", flush=True)
+                if ack_data and ack_data.get('received'):
+                    print(f"✅ Pending response delivery confirmed by client acknowledgment for session {session_id}", flush=True)
+                    print(f"✅ Acknowledgment data: {ack_data}", flush=True)
                     # Clean up after confirmed delivery
                     try:
                         if redis_manager.is_available():
@@ -1056,10 +1107,16 @@ def init_socketio(socketio_instance: SocketIO, app):
                     except Exception as cleanup_error:
                         print(f"⚠️ Error cleaning up pending response: {cleanup_error}", flush=True)
                 else:
-                    print(f"⚠️ Pending response delivery NOT confirmed for session {session_id}", flush=True)
-                    # Keep pending response in case we need to retry
-                    sentry_capture_voice_event("pending_response_delivery_failed", session_id, user_id, details={"original_session": original_session_id, "method": "client_ready"})
+                    print(f"⚠️ Pending response delivery NOT confirmed for session {session_id} (ack_data: {ack_data})", flush=True)
+                    # Keep pending response in Redis for retry, but clean up session-specific storage
+                    try:
+                        if hasattr(socketio, '_pending_responses') and session_id in socketio._pending_responses:
+                            del socketio._pending_responses[session_id]
+                    except:
+                        pass
+                    sentry_capture_voice_event("pending_response_delivery_failed", session_id, user_id, details={"original_session": original_session_id, "method": "client_ready", "ack_data": ack_data})
             
+            # Use emit with callback for acknowledgment
             socketio.emit('agent_response', {
                 'success': True,
                 'text': pending_response['text'],
@@ -1067,7 +1124,7 @@ def init_socketio(socketio_instance: SocketIO, app):
                 'pending': True  # Flag to indicate this is a pending response
             }, namespace='/voice', room=session_id, callback=delivery_callback)
             
-            print(f"📤 Pending response event emitted to session {session_id} (waiting for delivery confirmation)", flush=True)
+            print(f"📤 Pending response event emitted to session {session_id} (waiting for client acknowledgment)", flush=True)
     
     
     @socketio.on('start_recording', namespace='/voice')
