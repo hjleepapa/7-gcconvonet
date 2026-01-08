@@ -587,10 +587,23 @@ def init_socketio(socketio_instance: SocketIO, app):
                     print(f"✅ Test authentication stored in memory (Redis error fallback)")
                     sentry_capture_voice_event("authentication_success", session_id, "test_user", {"user_name": "Test User", "storage": "memory_error_fallback", "mode": "test"})
                 
+                # Check if session was already authenticated (re-authentication scenario)
+                was_already_authenticated = False
+                try:
+                    existing_session = get_session(session_id)
+                    if existing_session:
+                        existing_auth = existing_session.get('authenticated') == 'True' if redis_manager.is_available() else existing_session.get('authenticated', False)
+                        existing_user_id = existing_session.get('user_id', '')
+                        if existing_auth and existing_user_id == 'test_user':
+                            was_already_authenticated = True
+                            print(f"🔄 Re-authentication detected for test_user (session {session_id})")
+                except:
+                    pass
+                
                 emit('authenticated', {
                     'success': True,
                     'user_name': 'Test User',
-                    'message': "Welcome! You're in test mode."
+                    'message': "Welcome! You're in test mode." if not was_already_authenticated else "Reconnected! You're in test mode."
                 })
                 
                 # Check for pending responses for test user
@@ -613,12 +626,16 @@ def init_socketio(socketio_instance: SocketIO, app):
                 except Exception as pending_error:
                     print(f"⚠️ Error checking/sending pending response: {pending_error}", flush=True)
                 
-                # Send welcome greeting with audio (background task)
-                socketio.start_background_task(
-                    send_welcome_greeting, 
-                    session_id, 
-                    'Test User'
-                )
+                # Only send welcome greeting on first authentication, not on re-authentication
+                if not was_already_authenticated:
+                    # Send welcome greeting with audio (background task)
+                    socketio.start_background_task(
+                        send_welcome_greeting, 
+                        session_id, 
+                        'Test User'
+                    )
+                else:
+                    print(f"⏭️ Skipping welcome greeting (re-authentication)")
                 return
             
             # Import here to avoid circular imports
@@ -634,6 +651,19 @@ def init_socketio(socketio_instance: SocketIO, app):
                 ).first()
                 
                 if user:
+                    # Check if session was already authenticated (re-authentication scenario)
+                    was_already_authenticated = False
+                    try:
+                        existing_session = get_session(session_id)
+                        if existing_session:
+                            existing_auth = existing_session.get('authenticated') == 'True' if redis_manager.is_available() else existing_session.get('authenticated', False)
+                            existing_user_id = existing_session.get('user_id', '')
+                            if existing_auth and existing_user_id == str(user.id):
+                                was_already_authenticated = True
+                                print(f"🔄 Re-authentication detected for user {user.id} (session {session_id})")
+                    except:
+                        pass
+                    
                     # Authentication successful
                     auth_updates = {
                         'authenticated': 'True',
@@ -648,7 +678,7 @@ def init_socketio(socketio_instance: SocketIO, app):
                             if success:
                                 print(f"✅ Authentication stored in Redis: {user.email}")
                                 sentry_capture_redis_operation("update_session", session_id, True)
-                                sentry_capture_voice_event("authentication_success", session_id, str(user.id), {"user_name": user.first_name, "storage": "redis"})
+                                sentry_capture_voice_event("authentication_success", session_id, str(user.id), {"user_name": user.first_name, "storage": "redis", "re_authentication": was_already_authenticated})
                                 
                                 # Check for pending responses for this user
                                 try:
@@ -681,14 +711,14 @@ def init_socketio(socketio_instance: SocketIO, app):
                                 active_sessions[session_id]['user_id'] = str(user.id)
                                 active_sessions[session_id]['user_name'] = user.first_name
                                 print(f"✅ Authentication stored in memory (Redis fallback): {user.email}")
-                                sentry_capture_voice_event("authentication_success", session_id, str(user.id), {"user_name": user.first_name, "storage": "memory_fallback"})
+                                sentry_capture_voice_event("authentication_success", session_id, str(user.id), {"user_name": user.first_name, "storage": "memory_fallback", "re_authentication": was_already_authenticated})
                         else:
                             # Fallback to in-memory
                             active_sessions[session_id]['authenticated'] = True
                             active_sessions[session_id]['user_id'] = str(user.id)
                             active_sessions[session_id]['user_name'] = user.first_name
                             print(f"✅ Authentication stored in memory: {user.email}")
-                            sentry_capture_voice_event("authentication_success", session_id, str(user.id), {"user_name": user.first_name, "storage": "memory"})
+                            sentry_capture_voice_event("authentication_success", session_id, str(user.id), {"user_name": user.first_name, "storage": "memory", "re_authentication": was_already_authenticated})
                     except Exception as redis_error:
                         print(f"❌ Redis error during authentication: {redis_error}")
                         sentry_capture_redis_operation("update_session", session_id, False, str(redis_error))
@@ -697,20 +727,24 @@ def init_socketio(socketio_instance: SocketIO, app):
                         active_sessions[session_id]['user_id'] = str(user.id)
                         active_sessions[session_id]['user_name'] = user.first_name
                         print(f"✅ Authentication stored in memory (Redis error fallback): {user.email}")
-                        sentry_capture_voice_event("authentication_success", session_id, str(user.id), {"user_name": user.first_name, "storage": "memory_error_fallback"})
+                        sentry_capture_voice_event("authentication_success", session_id, str(user.id), {"user_name": user.first_name, "storage": "memory_error_fallback", "re_authentication": was_already_authenticated})
                     
                     emit('authenticated', {
                         'success': True,
                         'user_name': user.first_name,
-                        'message': f"Welcome back, {user.first_name}!"
+                        'message': f"Welcome back, {user.first_name}!" if not was_already_authenticated else f"Reconnected, {user.first_name}!"
                     })
                     
-                    # Send welcome greeting with audio (background task)
-                    socketio.start_background_task(
-                        send_welcome_greeting, 
-                        session_id, 
-                        user.first_name
-                    )
+                    # Only send welcome greeting on first authentication, not on re-authentication
+                    if not was_already_authenticated:
+                        # Send welcome greeting with audio (background task)
+                        socketio.start_background_task(
+                            send_welcome_greeting, 
+                            session_id, 
+                            user.first_name
+                        )
+                    else:
+                        print(f"⏭️ Skipping welcome greeting (re-authentication)")
                 else:
                     # Authentication failed
                     print(f"❌ Authentication failed: Invalid PIN")
