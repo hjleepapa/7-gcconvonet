@@ -267,19 +267,27 @@
                     reconnectionAttempts: 5
                 });
                 
+                // Track if this is the first connection (not a reconnect)
+                let isFirstConnection = true;
+                
                 socket.on('connect', () => {
                     console.log('✅ Connected to voice server');
                     showStatus('Connected! Ready to authenticate.', 'success');
                     
-                    // Auto-authenticate if we have a stored PIN (for reconnection scenarios)
-                    const storedPin = localStorage.getItem('voice_assistant_pin');
-                    if (storedPin) {
-                        console.log('🔐 Auto-authenticating with stored PIN on connect');
-                        setTimeout(() => {
-                            if (socket.connected) {
-                                socket.emit('authenticate', { pin: storedPin });
-                            }
-                        }, 500); // Small delay to ensure socket is fully ready
+                    // Only auto-authenticate on reconnect, not on initial page load
+                    // This prevents auto-login when user refreshes the page
+                    if (!isFirstConnection) {
+                        const storedPin = localStorage.getItem('voice_assistant_pin');
+                        if (storedPin) {
+                            console.log('🔐 Auto-authenticating with stored PIN on reconnect');
+                            setTimeout(() => {
+                                if (socket.connected) {
+                                    socket.emit('authenticate', { pin: storedPin });
+                                }
+                            }, 500); // Small delay to ensure socket is fully ready
+                        }
+                    } else {
+                        isFirstConnection = false; // Mark that we've had our first connection
                     }
                 });
                 

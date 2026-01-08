@@ -587,17 +587,19 @@ def init_socketio(socketio_instance: SocketIO, app):
                     print(f"✅ Test authentication stored in memory (Redis error fallback)")
                     sentry_capture_voice_event("authentication_success", session_id, "test_user", {"user_name": "Test User", "storage": "memory_error_fallback", "mode": "test"})
                 
-                # Check if session was already authenticated (re-authentication scenario)
+                # Check if user was recently authenticated (re-authentication scenario)
+                # We check by user_id, not session_id, because sessions are recreated on disconnect
                 was_already_authenticated = False
                 try:
-                    existing_session = get_session(session_id)
-                    if existing_session:
-                        existing_auth = existing_session.get('authenticated') == 'True' if redis_manager.is_available() else existing_session.get('authenticated', False)
-                        existing_user_id = existing_session.get('user_id', '')
-                        if existing_auth and existing_user_id == 'test_user':
+                    if redis_manager.is_available():
+                        # Check if test_user was authenticated recently (within last 5 minutes)
+                        recent_auth_key = f"recent_auth:test_user"
+                        recent_auth_data = redis_manager.redis_client.get(recent_auth_key)
+                        if recent_auth_data:
                             was_already_authenticated = True
                             print(f"🔄 Re-authentication detected for test_user (session {session_id})")
-                except:
+                except Exception as auth_check_error:
+                    print(f"⚠️ Error checking recent authentication: {auth_check_error}")
                     pass
                 
                 emit('authenticated', {
@@ -626,6 +628,15 @@ def init_socketio(socketio_instance: SocketIO, app):
                 except Exception as pending_error:
                     print(f"⚠️ Error checking/sending pending response: {pending_error}", flush=True)
                 
+                # Track recent authentication for re-authentication detection
+                try:
+                    if redis_manager.is_available() and not was_already_authenticated:
+                        # Store recent authentication timestamp (5 minute TTL)
+                        recent_auth_key = f"recent_auth:test_user"
+                        redis_manager.redis_client.setex(recent_auth_key, 300, str(time.time()))
+                except Exception as track_error:
+                    print(f"⚠️ Error tracking recent authentication: {track_error}")
+                
                 # Only send welcome greeting on first authentication, not on re-authentication
                 if not was_already_authenticated:
                     # Send welcome greeting with audio (background task)
@@ -651,17 +662,20 @@ def init_socketio(socketio_instance: SocketIO, app):
                 ).first()
                 
                 if user:
-                    # Check if session was already authenticated (re-authentication scenario)
+                    # Check if user was recently authenticated (re-authentication scenario)
+                    # We check by user_id, not session_id, because sessions are recreated on disconnect
                     was_already_authenticated = False
+                    user_id_str = str(user.id)
                     try:
-                        existing_session = get_session(session_id)
-                        if existing_session:
-                            existing_auth = existing_session.get('authenticated') == 'True' if redis_manager.is_available() else existing_session.get('authenticated', False)
-                            existing_user_id = existing_session.get('user_id', '')
-                            if existing_auth and existing_user_id == str(user.id):
+                        if redis_manager.is_available():
+                            # Check if user was authenticated recently (within last 5 minutes)
+                            recent_auth_key = f"recent_auth:{user_id_str}"
+                            recent_auth_data = redis_manager.redis_client.get(recent_auth_key)
+                            if recent_auth_data:
                                 was_already_authenticated = True
                                 print(f"🔄 Re-authentication detected for user {user.id} (session {session_id})")
-                    except:
+                    except Exception as auth_check_error:
+                        print(f"⚠️ Error checking recent authentication: {auth_check_error}")
                         pass
                     
                     # Authentication successful
@@ -734,6 +748,15 @@ def init_socketio(socketio_instance: SocketIO, app):
                         'user_name': user.first_name,
                         'message': f"Welcome back, {user.first_name}!" if not was_already_authenticated else f"Reconnected, {user.first_name}!"
                     })
+                    
+                    # Track recent authentication for re-authentication detection
+                    try:
+                        if redis_manager.is_available() and not was_already_authenticated:
+                            # Store recent authentication timestamp (5 minute TTL)
+                            recent_auth_key = f"recent_auth:{user_id_str}"
+                            redis_manager.redis_client.setex(recent_auth_key, 300, str(time.time()))
+                    except Exception as track_error:
+                        print(f"⚠️ Error tracking recent authentication: {track_error}")
                     
                     # Only send welcome greeting on first authentication, not on re-authentication
                     if not was_already_authenticated:
