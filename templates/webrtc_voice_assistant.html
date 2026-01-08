@@ -390,13 +390,22 @@
             
             socket.on('agent_response', (data) => {
                 console.log('📨 agent_response event received:', data);
-                if (data.success) {
+                console.log('📨 Full data object:', JSON.stringify(data, null, 2));
+                
+                if (data && data.success) {
                     console.log('✅ Response success, text length:', data.text ? data.text.length : 0);
+                    console.log('✅ Audio length:', data.audio ? data.audio.length : 0);
+                    
                     if (data.pending) {
                         console.log('📬 This is a pending response (client reconnected during TTS generation)');
                         showStatus('Received response (reconnected)', 'success');
                     }
-                    addTranscript('agent', data.text);
+                    
+                    if (data.text) {
+                        addTranscript('agent', data.text);
+                    } else {
+                        console.warn('⚠️ No text in agent_response');
+                    }
                     
                     // Play audio response
                     if (data.audio) {
@@ -405,11 +414,15 @@
                         playAudioResponse(data.audio);
                     } else {
                         console.log('❌ No audio data in response');
+                        // Even without audio, reset the button if we have text
+                        if (data.text) {
+                            resetMicButton();
+                        }
                     }
                     
                     resetMicButton();
                 } else {
-                    console.log('❌ Response failed:', data);
+                    console.log('❌ Response failed or invalid:', data);
                     showStatus('Error getting response', 'error');
                     resetMicButton();
                 }

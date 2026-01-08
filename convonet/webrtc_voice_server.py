@@ -743,16 +743,32 @@ def init_socketio(socketio_instance: SocketIO, app):
                         if pending_data:
                             pending_response = json.loads(pending_data)
                             print(f"📬 Found pending response for test_user, sending to session {session_id}", flush=True)
-                            socketio.emit('agent_response', {
-                                'success': True,
-                                'text': pending_response['text'],
-                                'audio': pending_response['audio'],
-                                'pending': True
-                            }, namespace='/voice', room=session_id)
-                            redis_manager.redis_client.delete(redis_key)
-                            print(f"✅ Pending response sent and cleared for test_user", flush=True)
+                            
+                            # Send pending response with a small delay to ensure client is ready
+                            def send_pending_response_test():
+                                import eventlet
+                                eventlet.sleep(0.5)  # Small delay to ensure client is ready
+                                
+                                # Check if session still exists before sending
+                                current_session = get_session(session_id)
+                                if current_session:
+                                    print(f"📤 Sending pending response to test_user session {session_id} (delayed)", flush=True)
+                                    socketio.emit('agent_response', {
+                                        'success': True,
+                                        'text': pending_response['text'],
+                                        'audio': pending_response['audio'],
+                                        'pending': True
+                                    }, namespace='/voice', room=session_id)
+                                    redis_manager.redis_client.delete(redis_key)
+                                    print(f"✅ Pending response sent and cleared for test_user", flush=True)
+                                else:
+                                    print(f"⚠️ Session {session_id} no longer exists, cannot send pending response", flush=True)
+                            
+                            socketio.start_background_task(send_pending_response_test)
                 except Exception as pending_error:
                     print(f"⚠️ Error checking/sending pending response: {pending_error}", flush=True)
+                    import traceback
+                    traceback.print_exc()
                 
                 # Track recent authentication for re-authentication detection
                 try:
@@ -829,20 +845,35 @@ def init_socketio(socketio_instance: SocketIO, app):
                                         pending_response = json.loads(pending_data)
                                         print(f"📬 Found pending response for user {user.id}, sending to new session {session_id}", flush=True)
                                         
-                                        # Send pending response to new session
-                                        socketio.emit('agent_response', {
-                                            'success': True,
-                                            'text': pending_response['text'],
-                                            'audio': pending_response['audio'],
-                                            'pending': True  # Flag to indicate this is a pending response
-                                        }, namespace='/voice', room=session_id)
+                                        # Send pending response to new session with a small delay to ensure client is ready
+                                        # The client needs time to set up event listeners after re-authentication
+                                        def send_pending_response():
+                                            import eventlet
+                                            eventlet.sleep(0.5)  # Small delay to ensure client is ready
+                                            
+                                            # Check if session still exists before sending
+                                            current_session = get_session(session_id)
+                                            if current_session:
+                                                print(f"📤 Sending pending response to session {session_id} (delayed)", flush=True)
+                                                socketio.emit('agent_response', {
+                                                    'success': True,
+                                                    'text': pending_response['text'],
+                                                    'audio': pending_response['audio'],
+                                                    'pending': True  # Flag to indicate this is a pending response
+                                                }, namespace='/voice', room=session_id)
+                                                
+                                                # Delete pending response after sending
+                                                redis_manager.redis_client.delete(redis_key)
+                                                print(f"✅ Pending response sent and cleared for user {user.id}", flush=True)
+                                                sentry_capture_voice_event("pending_response_delivered", session_id, str(user.id), details={"original_session": pending_response.get('original_session_id')})
+                                            else:
+                                                print(f"⚠️ Session {session_id} no longer exists, cannot send pending response", flush=True)
                                         
-                                        # Delete pending response after sending
-                                        redis_manager.redis_client.delete(redis_key)
-                                        print(f"✅ Pending response sent and cleared for user {user.id}", flush=True)
-                                        sentry_capture_voice_event("pending_response_delivered", session_id, str(user.id), details={"original_session": pending_response.get('original_session_id')})
+                                        socketio.start_background_task(send_pending_response)
                                 except Exception as pending_error:
                                     print(f"⚠️ Error checking/sending pending response: {pending_error}", flush=True)
+                                    import traceback
+                                    traceback.print_exc()
                             else:
                                 print(f"❌ Failed to update session in Redis: {user.email}")
                                 sentry_capture_redis_operation("update_session", session_id, False, "Redis update_session returned False")
