@@ -1505,8 +1505,10 @@ def init_socketio(socketio_instance: SocketIO, app):
                             def emit_callback(success):
                                 if success:
                                     print(f"✅ agent_response delivered successfully to session {session_id}", flush=True)
+                                    sentry_capture_voice_event("agent_response_delivered", session_id, session.get('user_id') if 'session' in locals() else None, details={"success": True})
                                 else:
                                     print(f"⚠️ agent_response delivery failed to session {session_id} (client may have disconnected)", flush=True)
+                                    sentry_capture_voice_event("agent_response_delivery_failed", session_id, session.get('user_id') if 'session' in locals() else None, details={"reason": "emit_callback_returned_false"})
                             
                             emit_socketio.emit('agent_response', {
                                 'success': True,
