@@ -1497,26 +1497,34 @@ def init_socketio(socketio_instance: SocketIO, app):
                         if not emit_socketio:
                             raise Exception("socketio instance not available")
                         
-                        # Check if client is still in the room/namespace
+                        # Check if client is still in the room/namespace before emitting
+                        clients_in_room = None
                         try:
                             namespace = emit_socketio.server.namespace_handlers.get('/voice')
                             if namespace:
                                 # Try to get the room to see if client is still connected
+                                # In Socket.IO, each client is automatically added to a room with their session_id
                                 room_clients = namespace.rooms.get(session_id, set())
-                                if not room_clients:
-                                    print(f"⚠️ No clients in room {session_id}, client may have disconnected", flush=True)
+                                clients_in_room = len(room_clients) if room_clients else 0
+                                if clients_in_room == 0:
+                                    print(f"⚠️ No clients in room {session_id}, client has disconnected - SKIPPING emit", flush=True)
                                     sentry_capture_voice_event("agent_response_skipped_no_clients", session_id, session.get('user_id') if 'session' in locals() else None)
+                                    # Skip emit - client is not connected
+                                    return
                                 else:
-                                    print(f"✅ Found {len(room_clients)} client(s) in room {session_id}, emitting...", flush=True)
+                                    print(f"✅ Found {clients_in_room} client(s) in room {session_id}, emitting...", flush=True)
+                            else:
+                                print(f"⚠️ Could not find /voice namespace, proceeding with emit anyway", flush=True)
                         except Exception as room_check_error:
                             print(f"⚠️ Could not check room status: {room_check_error}, proceeding with emit anyway", flush=True)
                         
+                        # Emit the response
                         emit_socketio.emit('agent_response', {
                             'success': True,
                             'text': agent_response,
                             'audio': audio_base64
                         }, namespace='/voice', room=session_id)
-                        print(f"✅ agent_response event emitted successfully to session {session_id}", flush=True)
+                        print(f"✅ agent_response event emitted successfully to session {session_id} (clients in room: {clients_in_room if clients_in_room is not None else 'unknown'})", flush=True)
                     except Exception as emit_error:
                         print(f"❌ Error emitting agent_response: {emit_error}", flush=True)
                         import traceback
