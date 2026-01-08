@@ -3,7 +3,7 @@ Mortgage Application Models for Convonet
 Database models for pre-approved mortgage application process
 """
 
-from sqlalchemy import Column, String, DateTime, Boolean, ForeignKey, Text, Enum, Numeric, Integer, JSON
+from sqlalchemy import Column, String, DateTime, Boolean, ForeignKey, Text, Enum, Numeric, Integer, JSON, TypeDecorator
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import UUID
 from datetime import datetime, timezone
@@ -11,6 +11,47 @@ from enum import Enum as PyEnum
 import uuid
 
 from convonet.models.base import Base
+
+
+class EnumValueType(TypeDecorator):
+    """TypeDecorator that ensures enum values (not names) are stored in the database.
+    
+    Since the database enum type already exists via migration, we store as String
+    but validate against the enum. The database enum type will validate the values.
+    PostgreSQL will cast the string to the enum type if it matches a valid enum value.
+    """
+    impl = String
+    cache_ok = True
+    
+    def __init__(self, enum_class, *args, **kwargs):
+        self.enum_class = enum_class
+        # Get the max length needed for enum values
+        max_length = max(len(e.value) for e in enum_class) if enum_class else 50
+        super().__init__(max_length, *args, **kwargs)
+    
+    def process_bind_param(self, value, dialect):
+        """Convert enum to its value when storing in database"""
+        if value is None:
+            return None
+        if isinstance(value, self.enum_class):
+            return value.value  # Use enum value ("draft"), not name ("DRAFT")
+        # If it's already a string, return as-is (should be the enum value)
+        return value
+    
+    def process_result_value(self, value, dialect):
+        """Convert database value back to enum"""
+        if value is None:
+            return None
+        # Database returns the enum value as string (e.g., "draft")
+        # Convert back to enum instance
+        if isinstance(value, str):
+            for member in self.enum_class:
+                if member.value == value:
+                    return member
+        # If it's already an enum instance, return as-is
+        if isinstance(value, self.enum_class):
+            return value
+        return value
 
 
 class ApplicationStatus(str, PyEnum):
@@ -59,8 +100,14 @@ class MortgageApplication(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey('users_anthropic.id'), nullable=False, index=True)
     
-    # Application status - use native_enum=True to use PostgreSQL enum type
-    status = Column(Enum(ApplicationStatus, native_enum=True, create_constraint=True), default=ApplicationStatus.DRAFT, nullable=False, index=True)
+    # Application status - use EnumValueType to ensure enum values ("draft") are stored, not enum names ("DRAFT")
+    # PostgreSQL enum type already exists via migration, so we store as String but validate against enum
+    status = Column(
+        EnumValueType(ApplicationStatus),
+        default=ApplicationStatus.DRAFT,
+        nullable=False,
+        index=True
+    )
     
     # Financial Information (Step 1: Review Finances)
     credit_score = Column(Integer, nullable=True)
@@ -116,7 +163,12 @@ class MortgageDocument(Base):
     application_id = Column(UUID(as_uuid=True), ForeignKey('mortgage_applications.id'), nullable=False, index=True)
     
     # Document information
-    document_type = Column(Enum(DocumentType, native_enum=True, create_constraint=True), nullable=False, index=True)
+    # Document type - use EnumValueType to ensure enum values are stored
+    document_type = Column(
+        EnumValueType(DocumentType),
+        nullable=False,
+        index=True
+    )
     document_name = Column(String(255), nullable=False)
     file_path = Column(String(500), nullable=True)  # Path to stored file
     file_url = Column(String(500), nullable=True)  # URL if stored externally
@@ -124,7 +176,13 @@ class MortgageDocument(Base):
     mime_type = Column(String(100), nullable=True)
     
     # Document status
-    status = Column(Enum(DocumentStatus, native_enum=True, create_constraint=True), default=DocumentStatus.PENDING, nullable=False, index=True)
+    # Document status - use EnumValueType to ensure enum values are stored
+    status = Column(
+        EnumValueType(DocumentStatus),
+        default=DocumentStatus.PENDING,
+        nullable=False,
+        index=True
+    )
     
     # Verification details
     verified_at = Column(DateTime(timezone=True), nullable=True)

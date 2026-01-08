@@ -80,9 +80,10 @@ def create_mortgage_application(user_id: str) -> Dict[str, Any]:
     _lazy_import_mortgage_models()
     db = SessionLocal()
     try:
+        # Use enum instance - EnumValueType will convert to value automatically
         application = MortgageApplication(
             user_id=UUID(user_id),
-            status=ApplicationStatus.DRAFT
+            status=ApplicationStatus.DRAFT  # EnumValueType will convert to "draft" value
         )
         db.add(application)
         db.commit()
