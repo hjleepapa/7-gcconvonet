@@ -79,7 +79,7 @@ CREATE TABLE mortgage_applications (
     document_verification_completed BOOLEAN NOT NULL DEFAULT FALSE,
     
     -- Additional metadata
-    metadata JSONB,
+    app_metadata JSONB,  -- Renamed from 'metadata' (SQLAlchemy reserved)
     
     -- Timestamps
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -110,7 +110,7 @@ CREATE TABLE mortgage_documents (
     rejection_reason TEXT,
     
     -- Document metadata
-    metadata JSONB,
+    doc_metadata JSONB,  -- Renamed from 'metadata' (SQLAlchemy reserved)
     
     -- Timestamps
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,

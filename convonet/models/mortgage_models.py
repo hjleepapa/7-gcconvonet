@@ -83,7 +83,7 @@ class MortgageApplication(Base):
     document_verification_completed = Column(Boolean, default=False, nullable=False)
     
     # Additional metadata
-    metadata = Column(JSON, nullable=True)  # Store additional flexible data
+    app_metadata = Column(JSON, nullable=True)  # Store additional flexible data (renamed from 'metadata' - SQLAlchemy reserved)
     
     # Timestamps
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
@@ -133,7 +133,7 @@ class MortgageDocument(Base):
     rejection_reason = Column(Text, nullable=True)
     
     # Document metadata
-    metadata = Column(JSON, nullable=True)  # Store document-specific metadata
+    doc_metadata = Column(JSON, nullable=True)  # Store document-specific metadata (renamed from 'metadata' - SQLAlchemy reserved)
     
     # Timestamps
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
