@@ -76,6 +76,17 @@ def create_app():
     bootstrap.init_app(app)
     migrate.init_app(app, db) # Initialize Flask-Migrate
     
+    # Import all models at startup for Flask-Migrate autogenerate
+    # This ensures all models are registered with SQLAlchemy Base.metadata
+    try:
+        from convonet.models import (
+            User, Team, TeamMembership,
+            MortgageApplication, MortgageDocument, MortgageDebt, MortgageApplicationNote
+        )
+        print("✅ All models imported for Flask-Migrate")
+    except ImportError as e:
+        print(f"⚠️  Could not import models: {e}")
+    
     # Initialize Socket.IO for WebRTC voice
     # Use 'eventlet' for production (Gunicorn compatibility)
     # Use 'threading' for local development
