@@ -2194,10 +2194,30 @@ def init_socketio(socketio_instance: SocketIO, app):
                     
                     # Combine all chunks for fallback/pending storage
                     if all_audio_chunks:
-                        # Note: We don't actually combine the base64 strings, we just track that chunks were sent
-                        # The client handles playing them sequentially
-                        audio_base64 = "".join(all_audio_chunks)  # For size calculation only
-                        print(f"🔊 Streaming TTS completed: {len(all_audio_chunks)} chunks, {len(audio_base64)} total chars", flush=True)
+                        # Properly combine base64 chunks: decode to binary, concatenate, then re-encode
+                        # (Cannot just concatenate base64 strings - that's invalid!)
+                        combined_audio_binary = b''
+                        
+                        # Include early TTS chunks if they exist (first chunk might have been generated via early TTS)
+                        with text_accumulator['lock']:
+                            early_chunks = text_accumulator.get('early_audio_chunks', [])
+                            if early_chunks:
+                                for early_chunk in early_chunks:
+                                    try:
+                                        combined_audio_binary += base64.b64decode(early_chunk['audio'])
+                                    except Exception as e:
+                                        print(f"⚠️ Error decoding early TTS chunk: {e}", flush=True)
+                        
+                        # Add regular streaming chunks
+                        for chunk_base64 in all_audio_chunks:
+                            try:
+                                combined_audio_binary += base64.b64decode(chunk_base64)
+                            except Exception as e:
+                                print(f"⚠️ Error decoding streaming chunk: {e}", flush=True)
+                        
+                        # Re-encode to base64
+                        audio_base64 = base64.b64encode(combined_audio_binary).decode('utf-8')
+                        print(f"🔊 Streaming TTS completed: {len(all_audio_chunks)} chunks, {len(audio_base64)} total chars (properly combined)", flush=True)
                         if chunk_errors:
                             print(f"⚠️ {len(chunk_errors)} chunks failed: {chunk_errors}", flush=True)
                         
