@@ -9,6 +9,8 @@ import os
 import base64
 import time
 import re
+import threading
+from typing import Optional
 from uuid import UUID
 from urllib.parse import quote
 from flask import Blueprint, render_template, request, jsonify
@@ -1730,10 +1732,71 @@ def init_socketio(socketio_instance: SocketIO, app):
                 print(f"✅ sentry_capture_voice_event for agent_processing_started completed", flush=True)
                 sys.stdout.flush()
                 
+                # LATENCY OPTIMIZATION: Prepare TTS settings EARLY (before agent processing)
+                # This allows us to start TTS generation as soon as first sentence arrives
+                user_id = session.get('user_id')
+                voice_prefs = get_voice_preferences() if ELEVENLABS_AVAILABLE else None
+                tts_provider = "deepgram"  # Default fallback
+                use_elevenlabs = False
+                voice_id = None
+                language = "en"
+                emotion_enabled = False
+                emotion = None
+                
+                # Determine TTS provider and settings (early, before agent processing)
+                if ELEVENLABS_AVAILABLE and voice_prefs:
+                    try:
+                        elevenlabs = get_elevenlabs_service()
+                        if elevenlabs and elevenlabs.is_available():
+                            prefs = voice_prefs.get_user_preferences(user_id) if user_id else voice_prefs._get_default_preferences()
+                            if prefs.get("use_elevenlabs", True):
+                                use_elevenlabs = True
+                                tts_provider = "elevenlabs"
+                                voice_id = prefs.get("voice_id")
+                                language = prefs.get("language", "en")
+                                emotion_enabled = prefs.get("emotion_enabled", True)
+                                # Note: Emotion detection will happen after we get first sentence
+                    except Exception as e:
+                        print(f"⚠️ ElevenLabs setup failed, falling back to Deepgram: {e}", flush=True)
+                        use_elevenlabs = False
+                        tts_provider = "deepgram"
+                
                 print(f"🤖 Starting agent processing for: {transcribed_text[:100]}", flush=True)
                 sys.stdout.flush()
                 print(f"🔧 About to call process_with_agent in separate thread...", flush=True)
                 sys.stdout.flush()
+                
+                # LATENCY OPTIMIZATION: Track accumulated text for early TTS generation (defined in outer scope)
+                import threading
+                text_accumulator = {
+                    'text': '',
+                    'lock': threading.Lock(),
+                    'first_sentence': None,
+                    'first_sentence_ready': threading.Event(),
+                    'tts_started': False,
+                    'early_audio_chunks': [],
+                    'early_chunk_index': 0
+                }
+                
+                # Define text chunk callback for early TTS (must be defined before run_async_in_thread)
+                def text_chunk_callback(chunk_text: str):
+                    """Callback to accumulate text chunks and trigger early TTS on first sentence"""
+                    with text_accumulator['lock']:
+                        text_accumulator['text'] += chunk_text
+                        current_text = text_accumulator['text']
+                        
+                        # Check if we have a complete sentence (ends with . ! ?)
+                        if text_accumulator['first_sentence'] is None:
+                            # Try to extract first complete sentence
+                            sentences = re.split(r'(?<=[.!?])\s+', current_text)
+                            if len(sentences) > 0 and sentences[0].strip():
+                                first_sentence = sentences[0].strip()
+                                # Minimum sentence length to start TTS (avoid fragments)
+                                if len(first_sentence) > 20:
+                                    text_accumulator['first_sentence'] = first_sentence
+                                    text_accumulator['first_sentence_ready'].set()
+                                    print(f"🚀 FIRST SENTENCE DETECTED: {first_sentence[:80]}...", flush=True)
+                
                 try:
                     print(f"🔧 Setting up ThreadPoolExecutor...", flush=True)
                     sys.stdout.flush()
@@ -1775,7 +1838,8 @@ def init_socketio(socketio_instance: SocketIO, app):
                                         session['user_id'],
                                         session['user_name'],
                                         socketio=socketio_instance,
-                                        session_id=session_id
+                                        session_id=session_id,
+                                        text_chunk_callback=text_chunk_callback  # Pass callback for early TTS (from outer scope)
                                     ),
                                     timeout=timeout_seconds
                                 )
@@ -1819,23 +1883,90 @@ def init_socketio(socketio_instance: SocketIO, app):
                     print(f"🚀 Submitting to ThreadPoolExecutor...", flush=True)
                     sys.stdout.flush()
                     
-                    # LATENCY OPTIMIZATION: Track accumulated text for early TTS generation
-                    accumulated_text = ""
-                    tts_started = False
-                    first_sentence_processed = False
+                    # Function to generate early TTS for first sentence
+                    def generate_early_tts(first_sentence: str):
+                        """Generate TTS for first sentence in background thread"""
+                        try:
+                            print(f"🎵 Starting early TTS generation for first sentence...", flush=True)
+                            socketio.emit('status', {'message': 'Generating speech...'}, namespace='/voice', room=session_id)
+                            
+                            # Use TTS settings prepared earlier
+                            chunk_audio = None
+                            if use_elevenlabs:
+                                try:
+                                    elevenlabs_service = get_elevenlabs_service()
+                                    if elevenlabs_service and elevenlabs_service.is_available():
+                                        # For early TTS, use basic emotion (will refine later with full response)
+                                        chunk_audio = elevenlabs_service.synthesize(
+                                            text=first_sentence,
+                                            voice_id=voice_id
+                                        )
+                                except Exception as e:
+                                    print(f"⚠️ Early ElevenLabs TTS failed: {e}", flush=True)
+                            
+                            if not chunk_audio:
+                                deepgram_tts_service = get_deepgram_tts_service()
+                                if deepgram_tts_service:
+                                    chunk_audio = deepgram_tts_service.synthesize_speech(first_sentence, voice="aura-asteria-en")
+                            
+                            if chunk_audio:
+                                chunk_base64 = base64.b64encode(chunk_audio).decode('utf-8')
+                                with text_accumulator['lock']:
+                                    text_accumulator['early_audio_chunks'].append({
+                                        'chunk_index': text_accumulator['early_chunk_index'],
+                                        'audio': chunk_base64,
+                                        'is_final': False
+                                    })
+                                    text_accumulator['early_chunk_index'] += 1
+                                
+                                # Emit early audio chunk immediately
+                                emit_socketio = socketio if socketio else (socketio_instance_global if 'socketio_instance_global' in globals() else None)
+                                if emit_socketio:
+                                    try:
+                                        emit_socketio.emit('audio_chunk', {
+                                            'success': True,
+                                            'chunk_index': 0,
+                                            'total_chunks': -1,  # Unknown at this point
+                                            'audio': chunk_base64,
+                                            'is_final': False,
+                                            'is_early': True  # Mark as early chunk
+                                        }, namespace='/voice', room=session_id)
+                                        print(f"📤 Emitted EARLY audio chunk ({len(chunk_base64)} chars)", flush=True)
+                                    except Exception as emit_error:
+                                        print(f"⚠️ Error emitting early chunk: {emit_error}", flush=True)
+                            else:
+                                print(f"⚠️ Failed to generate early TTS audio", flush=True)
+                        except Exception as e:
+                            print(f"❌ Error in early TTS generation: {e}", flush=True)
+                            import traceback
+                            traceback.print_exc()
                     
-                    with ThreadPoolExecutor(max_workers=1) as executor:
+                    with ThreadPoolExecutor(max_workers=2) as executor:  # Increased to 2 for early TTS thread
                         print(f"✅ ThreadPoolExecutor created, submitting task...", flush=True)
                         sys.stdout.flush()
                         future = executor.submit(run_async_in_thread)
                         print(f"✅ Task submitted to executor, future created", flush=True)
                         sys.stdout.flush()
+                        
+                        # LATENCY OPTIMIZATION: Wait for first sentence and start TTS early
+                        # This allows TTS to start while agent is still processing (tool execution, etc.)
+                        print(f"⏳ Waiting for first sentence (max 10s)...", flush=True)
+                        first_sentence_ready = text_accumulator['first_sentence_ready'].wait(timeout=10.0)
+                        
+                        if first_sentence_ready and text_accumulator['first_sentence']:
+                            first_sentence = text_accumulator['first_sentence']
+                            print(f"✅ First sentence ready! Starting early TTS: {first_sentence[:80]}...", flush=True)
+                            # Start early TTS generation in background thread
+                            early_tts_future = executor.submit(generate_early_tts, first_sentence)
+                        else:
+                            print(f"⏳ First sentence not ready yet, continuing...", flush=True)
+                        
                         # Use 60s timeout to allow for tool execution (database operations, API calls)
                         # Tool execution (MCP calls, API calls, database operations) can take time
                         # Increased from 25s to 60s to handle complex operations like calendar event creation
                         executor_timeout = 90.0  # Increased for MCP tools loading (was 60s)
                         try:
-                            print(f"⏳ Waiting for result with {executor_timeout}s timeout...", flush=True)
+                            print(f"⏳ Waiting for agent result with {executor_timeout}s timeout...", flush=True)
                             sys.stdout.flush()
                             
                             # Get final result (wait for completion)
@@ -1893,54 +2024,41 @@ def init_socketio(socketio_instance: SocketIO, app):
                         agent_response = agent_response if not isinstance(agent_response, str) or not agent_response.startswith("TRANSFER_INITIATED:") else "Let me know how else I can help."
                 
                 # Step 3: Convert response to speech using streaming chunks (ElevenLabs with Deepgram fallback)
-                socketio.emit('status', {'message': 'Generating speech...'}, namespace='/voice', room=session_id)
+                # Note: TTS settings were prepared earlier (before agent processing) for early TTS
+                # Check if early TTS was already started
+                early_tts_started = False
+                with text_accumulator['lock']:
+                    early_tts_started = len(text_accumulator['early_audio_chunks']) > 0
+                
+                if not early_tts_started:
+                    socketio.emit('status', {'message': 'Generating speech...'}, namespace='/voice', room=session_id)
                 sentry_capture_voice_event("tts_generation_started", session_id, session.get('user_id'))
                 
-                # Get user preferences (done once, used for all chunks)
-                user_id = session.get('user_id')
-                print(f"🔍 TTS Debug: ELEVENLABS_AVAILABLE={ELEVENLABS_AVAILABLE}, user_id={user_id}", flush=True)
-                
-                voice_prefs = get_voice_preferences() if ELEVENLABS_AVAILABLE else None
-                print(f"🔍 TTS Debug: voice_prefs={voice_prefs is not None}", flush=True)
-                
-                # Prepare TTS settings (determined once for all chunks)
-                tts_provider = "deepgram"  # Default fallback
-                use_elevenlabs = False
-                voice_id = None
-                language = "en"
-                emotion_enabled = False
-                emotion = None
-                
-                # Determine TTS provider and settings
-                if ELEVENLABS_AVAILABLE and voice_prefs:
+                # Detect emotion now that we have full response (for remaining chunks)
+                if emotion_enabled and not emotion:
                     try:
-                        elevenlabs = get_elevenlabs_service()
-                        if elevenlabs and elevenlabs.is_available():
-                            prefs = voice_prefs.get_user_preferences(user_id) if user_id else voice_prefs._get_default_preferences()
-                            if prefs.get("use_elevenlabs", True):
-                                use_elevenlabs = True
-                                tts_provider = "elevenlabs"
-                                voice_id = prefs.get("voice_id")
-                                language = prefs.get("language", "en")
-                                emotion_enabled = prefs.get("emotion_enabled", True)
-                                
-                                # Detect emotion once for the full response (used for all chunks)
-                                if emotion_enabled:
-                                    emotion_detector = get_emotion_detector()
-                                    user_input_text = transcribed_text if 'transcribed_text' in locals() else ""
-                                    emotion = emotion_detector.detect_emotion_from_context(
-                                        user_input=user_input_text,
-                                        agent_response=agent_response
-                                    )
-                                    print(f"🎭 Using ElevenLabs with emotion: {emotion.value}", flush=True)
+                        emotion_detector = get_emotion_detector()
+                        user_input_text = transcribed_text if 'transcribed_text' in locals() else ""
+                        emotion = emotion_detector.detect_emotion_from_context(
+                            user_input=user_input_text,
+                            agent_response=agent_response
+                        )
+                        print(f"🎭 Using ElevenLabs with emotion: {emotion.value}", flush=True)
                     except Exception as e:
-                        print(f"⚠️ ElevenLabs setup failed, falling back to Deepgram: {e}", flush=True)
-                        use_elevenlabs = False
-                        tts_provider = "deepgram"
+                        print(f"⚠️ Emotion detection failed: {e}", flush=True)
                 
                 # Split text into chunks for streaming
                 text_chunks = chunk_text_by_sentences(agent_response, min_chunk_size=100, max_chunk_size=400)
                 print(f"📝 Split response into {len(text_chunks)} chunks for streaming TTS", flush=True)
+                
+                # Check if first chunk matches early TTS sentence (skip if already generated)
+                skip_first_chunk = False
+                if early_tts_started and text_accumulator['first_sentence']:
+                    first_chunk = text_chunks[0] if text_chunks else ""
+                    # Check if first chunk starts with the early sentence
+                    if first_chunk.startswith(text_accumulator['first_sentence'][:50]):
+                        skip_first_chunk = True
+                        print(f"⏭️ Skipping first chunk (already generated via early TTS)", flush=True)
                 
                 # Track if we're using streaming mode
                 is_streaming = len(text_chunks) > 1
@@ -2013,8 +2131,11 @@ def init_socketio(socketio_instance: SocketIO, app):
                     if not use_elevenlabs:
                         deepgram_tts_service = get_deepgram_tts_service()
                     
-                    # Process each chunk
-                    for chunk_idx, text_chunk in enumerate(text_chunks):
+                    # Process each chunk (skip first if already generated via early TTS)
+                    start_idx = 1 if skip_first_chunk else 0
+                    chunk_offset = 1 if skip_first_chunk else 0  # Offset for chunk_index in emit
+                    
+                    for chunk_idx, text_chunk in enumerate(text_chunks[start_idx:], start=start_idx):
                         try:
                             chunk_audio = None
                             
@@ -2054,8 +2175,8 @@ def init_socketio(socketio_instance: SocketIO, app):
                                     try:
                                         emit_socketio.emit('audio_chunk', {
                                             'success': True,
-                                            'chunk_index': chunk_idx,
-                                            'total_chunks': len(text_chunks),
+                                            'chunk_index': chunk_idx - chunk_offset,  # Adjust index if first chunk was skipped
+                                            'total_chunks': len(text_chunks) - chunk_offset,  # Adjust total if first chunk was skipped
                                             'audio': chunk_base64,
                                             'is_final': chunk_idx == len(text_chunks) - 1
                                         }, namespace='/voice', room=session_id)
@@ -2199,6 +2320,7 @@ def init_socketio(socketio_instance: SocketIO, app):
                                     pending_response = {
                                         'text': agent_response,
                                         'audio': audio_base64,
+                                        'is_streaming': is_streaming if 'is_streaming' in locals() else False,
                                         'created_at': time.time(),
                                         'original_session_id': session_id
                                     }
@@ -2227,6 +2349,7 @@ def init_socketio(socketio_instance: SocketIO, app):
                                     pending_response = {
                                         'text': agent_response,
                                         'audio': audio_base64,
+                                        'is_streaming': is_streaming if 'is_streaming' in locals() else False,
                                         'created_at': time.time(),
                                         'original_session_id': session_id
                                     }
@@ -2289,21 +2412,24 @@ def init_socketio(socketio_instance: SocketIO, app):
                                         emit_socketio.emit('agent_response', {
                                             'success': True,
                                             'text': agent_response,
-                                            'audio': audio_base64
+                                            'audio': audio_base64,
+                                            'is_streaming': is_streaming if 'is_streaming' in locals() else False
                                         }, namespace='/voice', room=session_id, callback=emit_callback)
                                 else:
                                     # No user_id, try sending anyway
                                     emit_socketio.emit('agent_response', {
                                         'success': True,
                                         'text': agent_response,
-                                        'audio': audio_base64
+                                        'audio': audio_base64,
+                                        'is_streaming': is_streaming if 'is_streaming' in locals() else False
                                     }, namespace='/voice', room=session_id, callback=emit_callback)
                             else:
                                 # Small enough to send via Socket.IO
                                 emit_socketio.emit('agent_response', {
                                     'success': True,
                                     'text': agent_response,
-                                    'audio': audio_base64
+                                    'audio': audio_base64,
+                                    'is_streaming': is_streaming if 'is_streaming' in locals() else False
                                 }, namespace='/voice', room=session_id, callback=emit_callback)
                                 print(f"✅ agent_response event emitted to session {session_id} (Socket.IO will handle delivery)", flush=True)
                     except Exception as emit_error:
@@ -2353,6 +2479,7 @@ async def process_with_agent(
     user_name: str,
     socketio=None,
     session_id: str | None = None,
+    text_chunk_callback: Optional[callable] = None,  # Optional callback for text chunks (for early TTS)
 ) -> str:
     """Process user input with the agent"""
     try:
@@ -2390,6 +2517,7 @@ async def process_with_agent(
             socketio=socketio,
             session_id=session_id,
             model=voice_model,  # Use faster model for voice responses
+            text_chunk_callback=text_chunk_callback,  # Pass callback for early TTS
         )
         
         if isinstance(result, dict):

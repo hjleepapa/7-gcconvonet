@@ -357,7 +357,12 @@
                     }
                     
                     // Play audio response
-                    if (data.audio) {
+                    // Check if this is a streaming response (audio comes via chunks)
+                    // But if audio is provided in the response (e.g., from HTTP delivery), play it
+                    if (data.is_streaming && !data.audio) {
+                        console.log('🔊 Streaming response - audio will come via audio_chunk events');
+                        // Don't play audio here, wait for chunks
+                    } else if (data.audio) {
                         console.log('🔊 Received audio response:', data.audio.length, 'chars');
                         console.log('🔊 Audio preview:', data.audio.substring(0, 100) + '...');
                         console.log('🔊 Calling playAudioResponse()...');
