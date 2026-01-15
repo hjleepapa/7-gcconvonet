@@ -1583,16 +1583,14 @@ def init_socketio(socketio_instance: SocketIO, app):
                 # Use Deepgram for transcription (WebRTC-optimized solution)
                 print(f"🎧 Deepgram: Processing audio buffer: {len(audio_buffer)} bytes")
                 
-                # Use Deepgram integration with automatic language detection
-                # STT (transcription) should always use auto-detection to support multi-language
-                # TTS language preference is separate and handled later
+                # Use Deepgram integration with fixed English language (no auto-detection)
+                # STT should be forced to English to avoid mis-detecting other languages
                 import sys
-                print(f"🔧 About to call transcribe_audio_with_deepgram_webrtc with auto language detection...", flush=True)
+                print(f"🔧 About to call transcribe_audio_with_deepgram_webrtc with language='en'...", flush=True)
                 sys.stdout.flush()
                 try:
-                    # Always use None/"auto" for automatic language detection (supports 30+ languages)
-                    # This allows Deepgram to detect Korean, Japanese, Spanish, etc. automatically
-                    transcribed_text = transcribe_audio_with_deepgram_webrtc(audio_buffer, language=None)
+                    # Force English transcription only (disable auto-detection)
+                    transcribed_text = transcribe_audio_with_deepgram_webrtc(audio_buffer, language="en")
                     print(f"✅ transcribe_audio_with_deepgram_webrtc returned: {transcribed_text[:50] if transcribed_text else 'None'}...", flush=True)
                     sys.stdout.flush()
                 except Exception as e:
