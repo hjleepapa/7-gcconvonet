@@ -1723,6 +1723,29 @@ def init_socketio(socketio_instance: SocketIO, app):
                 socketio.emit('status', {'message': 'Processing request...'}, namespace='/voice', room=session_id)
                 print(f"✅ Status message emitted", flush=True)
                 sys.stdout.flush()
+
+                # LATENCY OPTIMIZATION: Send a short acknowledgement audio ASAP
+                # This helps callers hear something within a few seconds while the agent is thinking.
+                try:
+                    ack_text = "One moment while I check that."
+                    deepgram_tts = get_deepgram_tts_service()
+                    if deepgram_tts:
+                        ack_audio = deepgram_tts.synthesize_speech(ack_text, voice="aura-asteria-en")
+                        if ack_audio:
+                            ack_base64 = base64.b64encode(ack_audio).decode('utf-8')
+                            emit_socketio = socketio if socketio else (socketio_instance_global if 'socketio_instance_global' in globals() else None)
+                            if emit_socketio:
+                                emit_socketio.emit('audio_chunk', {
+                                    'success': True,
+                                    'chunk_index': 0,
+                                    'total_chunks': 1,
+                                    'audio': ack_base64,
+                                    'is_final': True,
+                                    'is_ack': True
+                                }, namespace='/voice', room=session_id)
+                                print("📤 Emitted acknowledgement audio chunk", flush=True)
+                except Exception as ack_error:
+                    print(f"⚠️ Ack audio generation failed: {ack_error}", flush=True)
                 
                 print(f"📝 About to call sentry_capture_voice_event for agent_processing_started...", flush=True)
                 sys.stdout.flush()
@@ -1890,7 +1913,13 @@ def init_socketio(socketio_instance: SocketIO, app):
                             
                             # Use TTS settings prepared earlier
                             chunk_audio = None
-                            if use_elevenlabs:
+
+                            # Prefer Deepgram for early TTS (typically faster) to reduce time-to-first-audio
+                            deepgram_tts_service = get_deepgram_tts_service()
+                            if deepgram_tts_service:
+                                chunk_audio = deepgram_tts_service.synthesize_speech(first_sentence, voice="aura-asteria-en")
+
+                            if not chunk_audio and use_elevenlabs:
                                 try:
                                     elevenlabs_service = get_elevenlabs_service()
                                     if elevenlabs_service and elevenlabs_service.is_available():
@@ -1901,11 +1930,6 @@ def init_socketio(socketio_instance: SocketIO, app):
                                         )
                                 except Exception as e:
                                     print(f"⚠️ Early ElevenLabs TTS failed: {e}", flush=True)
-                            
-                            if not chunk_audio:
-                                deepgram_tts_service = get_deepgram_tts_service()
-                                if deepgram_tts_service:
-                                    chunk_audio = deepgram_tts_service.synthesize_speech(first_sentence, voice="aura-asteria-en")
                             
                             if chunk_audio:
                                 chunk_base64 = base64.b64encode(chunk_audio).decode('utf-8')
