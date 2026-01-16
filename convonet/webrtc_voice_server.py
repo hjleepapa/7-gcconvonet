@@ -33,6 +33,22 @@ from twilio.rest import Client
 from deepgram_webrtc_integration import transcribe_audio_with_deepgram_webrtc, get_deepgram_webrtc_info
 from deepgram_service import get_deepgram_service
 
+# Deepgram streaming SDK (async)
+try:
+    from deepgram import AsyncDeepgramClient
+    from deepgram.core.events import EventType
+    from deepgram.extensions.types.sockets import (
+        ListenV2MediaMessage,
+        ListenV2ControlMessage,
+        SpeakV1TextMessage,
+        SpeakV1ControlMessage,
+        SpeakV1SocketClientResponse,
+    )
+    DEEPGRAM_STREAMING_AVAILABLE = True
+except Exception as e:
+    print(f"⚠️ Deepgram streaming SDK not available: {e}")
+    DEEPGRAM_STREAMING_AVAILABLE = False
+
 # ElevenLabs integration
 try:
     from convonet.elevenlabs_service import get_elevenlabs_service, EmotionType
@@ -79,6 +95,16 @@ except ImportError as e:
 ENABLE_TEST_PIN = os.getenv('ENABLE_TEST_PIN', 'false').lower() == 'true'
 TEST_VOICE_PIN = os.getenv('TEST_VOICE_PIN', '1234')
 
+# Streaming STT/TTS flags (enable full-duplex low-latency pipeline)
+STREAMING_STT_ENABLED = os.getenv('STREAMING_STT_ENABLED', 'true').lower() == 'true'
+STREAMING_TTS_ENABLED = os.getenv('STREAMING_TTS_ENABLED', 'true').lower() == 'true'
+STREAMING_STT_ENDPOINTING_MS = int(os.getenv('STREAMING_STT_ENDPOINTING_MS', '300'))
+STREAMING_STT_MODEL = os.getenv('STREAMING_STT_MODEL', 'nova-2')
+STREAMING_TTS_MODEL = os.getenv('STREAMING_TTS_MODEL', 'aura-2-asteria-en')
+
+# LLM model used for voice responses (warm-up target)
+VOICE_MODEL = os.getenv("VOICE_MODEL", "claude-3-5-haiku-20241022")
+
 webrtc_bp = Blueprint('webrtc_voice', __name__, url_prefix='/webrtc')
 
 # Initialize Deepgram service for STT and TTS
@@ -93,6 +119,271 @@ def get_deepgram_tts_service():
 
 # Active sessions storage (fallback for when Redis is unavailable)
 active_sessions = {}
+
+# Active streaming sessions (per Socket.IO session)
+streaming_sessions = {}
+
+# Track active response streams for barge-in cancellation
+active_response_controls = {}
+
+# One-time model warm-up flag
+MODEL_WARMED = False
+MODEL_WARMUP_LOCK = threading.Lock()
+
+
+class StreamingTTSStream:
+    """Deepgram streaming TTS connection to emit audio chunks as text arrives."""
+    def __init__(self, session_id: str, socketio_instance: SocketIO, model: str):
+        self.session_id = session_id
+        self.socketio = socketio_instance
+        self.model = model
+        self.loop = asyncio.new_event_loop()
+        self.thread = threading.Thread(target=self._run_loop, daemon=True)
+        self.text_queue = None
+        self.ready = threading.Event()
+        self.stop_event = threading.Event()
+        self.chunk_index = 0
+
+    def start(self):
+        self.thread.start()
+        self.ready.wait(timeout=5.0)
+
+    def send_text(self, text: str):
+        if not text or not text.strip() or not self.text_queue:
+            return
+        asyncio.run_coroutine_threadsafe(self.text_queue.put(text), self.loop)
+
+    def flush_and_close(self):
+        if self.text_queue:
+            asyncio.run_coroutine_threadsafe(self.text_queue.put(None), self.loop)
+
+    def stop(self):
+        self.flush_and_close()
+        self.stop_event.set()
+
+    def _emit_audio_chunk(self, chunk_bytes: bytes):
+        try:
+            chunk_base64 = base64.b64encode(chunk_bytes).decode('utf-8')
+            self.socketio.emit('audio_chunk', {
+                'success': True,
+                'chunk_index': self.chunk_index,
+                'total_chunks': -1,
+                'audio': chunk_base64,
+                'is_final': False
+            }, namespace='/voice', room=self.session_id)
+            self.chunk_index += 1
+        except Exception as emit_error:
+            print(f"⚠️ Error emitting streaming TTS chunk: {emit_error}", flush=True)
+
+    def _run_loop(self):
+        if not DEEPGRAM_STREAMING_AVAILABLE:
+            print("⚠️ Deepgram streaming SDK unavailable - cannot start streaming TTS", flush=True)
+            return
+        try:
+            asyncio.set_event_loop(self.loop)
+            self.text_queue = asyncio.Queue()
+            client = AsyncDeepgramClient(api_key=os.getenv("DEEPGRAM_API_KEY"))
+
+            async def run_connection():
+                async with client.speak.v1.connect(
+                    model=self.model,
+                    encoding="linear16",
+                    sample_rate=24000
+                ) as connection:
+                    def on_message(message: SpeakV1SocketClientResponse) -> None:
+                        if isinstance(message, bytes):
+                            self._emit_audio_chunk(message)
+
+                    connection.on(EventType.MESSAGE, on_message)
+                    connection.on(EventType.ERROR, lambda error: print(f"❌ Deepgram TTS error: {error}", flush=True))
+                    await connection.start_listening()
+                    self.ready.set()
+
+                    while not self.stop_event.is_set():
+                        text = await self.text_queue.get()
+                        if text is None:
+                            await connection.send_control(SpeakV1ControlMessage(type="Flush"))
+                            await connection.send_control(SpeakV1ControlMessage(type="Close"))
+                            break
+                        await connection.send_text(SpeakV1TextMessage(text=text))
+
+            self.loop.run_until_complete(run_connection())
+        except Exception as e:
+            print(f"❌ Streaming TTS loop error: {e}", flush=True)
+        finally:
+            try:
+                self.socketio.emit('audio_stream_complete', {
+                    'success': True,
+                    'total_chunks': self.chunk_index,
+                    'successful_chunks': self.chunk_index,
+                    'failed_chunks': 0
+                }, namespace='/voice', room=self.session_id)
+            except Exception:
+                pass
+            try:
+                self.loop.close()
+            except Exception:
+                pass
+
+
+class StreamingSTTSession:
+    """Deepgram streaming STT session for low-latency transcription."""
+    def __init__(self, session_id: str, socketio_instance: SocketIO, on_final_transcript, on_user_speech):
+        self.session_id = session_id
+        self.socketio = socketio_instance
+        self.on_final_transcript = on_final_transcript
+        self.on_user_speech = on_user_speech
+        self.loop = asyncio.new_event_loop()
+        self.thread = threading.Thread(target=self._run_loop, daemon=True)
+        self.audio_queue = None
+        self.stop_event = threading.Event()
+        self.active = threading.Event()
+        self.partial_segments = []
+        self.last_speech_time = 0.0
+
+    def start(self):
+        self.thread.start()
+        self.active.wait(timeout=5.0)
+
+    def send_audio(self, audio_chunk: bytes):
+        if not self.audio_queue:
+            return
+        asyncio.run_coroutine_threadsafe(self.audio_queue.put(audio_chunk), self.loop)
+
+    def stop(self):
+        if self.audio_queue:
+            asyncio.run_coroutine_threadsafe(self.audio_queue.put(None), self.loop)
+        self.stop_event.set()
+
+    def _handle_message(self, message):
+        try:
+            transcript = ""
+            is_final = False
+            speech_final = False
+
+            if hasattr(message, "channel") and message.channel and message.channel.alternatives:
+                transcript = message.channel.alternatives[0].transcript or ""
+            is_final = bool(getattr(message, "is_final", False))
+            speech_final = bool(getattr(message, "speech_final", False))
+            msg_type = getattr(message, "type", "")
+            if msg_type and str(msg_type).lower() in {"speech_final", "speechfinal"}:
+                speech_final = True
+
+            if transcript:
+                now = time.time()
+                if now - self.last_speech_time > 0.25:
+                    self.last_speech_time = now
+                    if self.on_user_speech:
+                        self.on_user_speech()
+
+                if is_final:
+                    self.partial_segments.append(transcript.strip())
+
+                if speech_final:
+                    full_text = " ".join(self.partial_segments).strip()
+                    self.partial_segments = []
+                    if full_text and self.on_final_transcript:
+                        self.on_final_transcript(full_text)
+        except Exception as e:
+            print(f"⚠️ Streaming STT message handling error: {e}", flush=True)
+
+    def _run_loop(self):
+        if not DEEPGRAM_STREAMING_AVAILABLE:
+            print("⚠️ Deepgram streaming SDK unavailable - cannot start streaming STT", flush=True)
+            return
+        try:
+            asyncio.set_event_loop(self.loop)
+            self.audio_queue = asyncio.Queue()
+            client = AsyncDeepgramClient(api_key=os.getenv("DEEPGRAM_API_KEY"))
+
+            async def run_connection():
+                async with client.listen.v2.connect(
+                    model=STREAMING_STT_MODEL,
+                    encoding="opus",
+                    sample_rate="48000",
+                    container="webm",
+                    language="en-US",
+                    interim_results=True,
+                    vad_events=True,
+                    endpointing=str(STREAMING_STT_ENDPOINTING_MS),
+                    smart_format=True,
+                ) as connection:
+                    connection.on(EventType.MESSAGE, self._handle_message)
+                    connection.on(EventType.ERROR, lambda error: print(f"❌ Deepgram STT error: {error}", flush=True))
+                    await connection.start_listening()
+                    self.active.set()
+
+                    while not self.stop_event.is_set():
+                        audio_chunk = await self.audio_queue.get()
+                        if audio_chunk is None:
+                            await connection.send_control(ListenV2ControlMessage(type="CloseStream"))
+                            break
+                        await connection.send_media(ListenV2MediaMessage(data=audio_chunk))
+
+            self.loop.run_until_complete(run_connection())
+        except Exception as e:
+            print(f"❌ Streaming STT loop error: {e}", flush=True)
+        finally:
+            try:
+                self.loop.close()
+            except Exception:
+                pass
+
+
+def warmup_llm_model():
+    """Warm up the LLM to reduce time-to-first-token on first real request."""
+    global MODEL_WARMED
+    with MODEL_WARMUP_LOCK:
+        if MODEL_WARMED:
+            return
+        MODEL_WARMED = True
+
+    def run_warmup():
+        try:
+            from convonet.routes import _run_agent_async
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(
+                _run_agent_async(
+                    prompt="Warm up. Reply with OK.",
+                    user_id="warmup",
+                    user_name="warmup",
+                    reset_thread=True,
+                    include_metadata=False,
+                    socketio=None,
+                    session_id=None,
+                    model=VOICE_MODEL,
+                    text_chunk_callback=None
+                )
+            )
+        except Exception as e:
+            print(f"⚠️ LLM warm-up failed: {e}", flush=True)
+        finally:
+            try:
+                loop.close()
+            except Exception:
+                pass
+
+    threading.Thread(target=run_warmup, daemon=True).start()
+
+
+def register_active_response(session_id: str, cancel_event: threading.Event, tts_stream: Optional[StreamingTTSStream]):
+    active_response_controls[session_id] = {
+        "cancel_event": cancel_event,
+        "tts_stream": tts_stream
+    }
+
+
+def cancel_active_response(session_id: str, reason: str = "barge_in"):
+    control = active_response_controls.get(session_id)
+    if control:
+        control["cancel_event"].set()
+        tts_stream = control.get("tts_stream")
+        if tts_stream:
+            tts_stream.stop()
+    emit_socketio = socketio if socketio else (socketio_instance_global if 'socketio_instance_global' in globals() else None)
+    if emit_socketio:
+        emit_socketio.emit('stop_audio', {'reason': reason}, namespace='/voice', room=session_id)
 
 # Global references for background tasks
 socketio = None
@@ -697,6 +988,9 @@ def init_socketio(socketio_instance: SocketIO, app):
             }
         
         emit('connected', {'session_id': session_id})
+
+        # Warm up LLM model on first client connection
+        warmup_llm_model()
     
     
     @socketio.on('disconnect', namespace='/voice')
@@ -704,6 +998,18 @@ def init_socketio(socketio_instance: SocketIO, app):
         """Handle client disconnection"""
         session_id = request.sid
         print(f"❌ WebRTC client disconnected: {session_id}")
+
+        # Stop any active streaming STT session
+        if session_id in streaming_sessions:
+            try:
+                streaming_sessions[session_id].stop()
+                del streaming_sessions[session_id]
+            except Exception as stop_error:
+                print(f"⚠️ Error stopping streaming session on disconnect: {stop_error}", flush=True)
+
+        # Clear active response controls on disconnect
+        if session_id in active_response_controls:
+            active_response_controls.pop(session_id, None)
         
         # Get user_id before deleting session (for pending response handling)
         user_id = None
@@ -1224,6 +1530,41 @@ def init_socketio(socketio_instance: SocketIO, app):
             active_sessions[session_id]['is_recording'] = True
             active_sessions[session_id]['audio_buffer'] = b''  # Start with empty bytes for binary concatenation
             print(f"🔍 Debug: cleared in-memory audio buffer for session: {session_id}")
+
+        # Start streaming STT session for low-latency transcription
+        if STREAMING_STT_ENABLED and DEEPGRAM_STREAMING_AVAILABLE:
+            try:
+                # Clean up any previous streaming session
+                if session_id in streaming_sessions:
+                    streaming_sessions[session_id].stop()
+                    del streaming_sessions[session_id]
+
+                def on_final_transcript(final_text: str):
+                    # Trigger agent processing immediately on speech final
+                    socketio.start_background_task(
+                        process_audio_async,
+                        session_id,
+                        None,
+                        transcribed_text_override=final_text,
+                        use_streaming_tts=True
+                    )
+
+                def on_user_speech():
+                    # Barge-in: stop current response if user speaks
+                    if session_id in active_response_controls:
+                        cancel_active_response(session_id, reason="barge_in")
+
+                streaming_session = StreamingSTTSession(
+                    session_id=session_id,
+                    socketio_instance=socketio,
+                    on_final_transcript=on_final_transcript,
+                    on_user_speech=on_user_speech
+                )
+                streaming_session.start()
+                streaming_sessions[session_id] = streaming_session
+                print(f"✅ Streaming STT session started for {session_id}", flush=True)
+            except Exception as stream_error:
+                print(f"⚠️ Failed to start streaming STT: {stream_error}", flush=True)
         
         emit('recording_started', {'success': True})
     
@@ -1255,6 +1596,14 @@ def init_socketio(socketio_instance: SocketIO, app):
         # Append audio chunk to buffer
         audio_chunk = base64.b64decode(data['audio'])
         print(f"🔍 Debug: received audio chunk: {len(audio_chunk)} bytes")
+
+        # Stream chunk to Deepgram STT for low-latency transcription
+        streaming_session = streaming_sessions.get(session_id)
+        if streaming_session:
+            try:
+                streaming_session.send_audio(audio_chunk)
+            except Exception as stream_error:
+                print(f"⚠️ Streaming STT send error: {stream_error}", flush=True)
         
         try:
             if redis_manager.is_available():
@@ -1383,6 +1732,17 @@ def init_socketio(socketio_instance: SocketIO, app):
         except Exception as e:
             print(f"❌ Error updating recording state: {e}")
             sentry_capture_redis_operation("update_recording_state", session_id, False, str(e))
+
+        # If streaming STT is active, stop the stream and return (skip batch transcription)
+        if STREAMING_STT_ENABLED and session_id in streaming_sessions:
+            try:
+                streaming_sessions[session_id].stop()
+                del streaming_sessions[session_id]
+                print(f"🛑 Streaming STT session stopped for {session_id}", flush=True)
+            except Exception as stop_error:
+                print(f"⚠️ Error stopping streaming STT: {stop_error}", flush=True)
+            emit('recording_stopped', {'success': True, 'streaming': True})
+            return
         
         # Get audio buffer - now from client data or session
         audio_buffer = None
@@ -1536,10 +1896,11 @@ def init_socketio(socketio_instance: SocketIO, app):
                 print(f"❌ Error generating welcome greeting: {e}")
     
     
-    def process_audio_async(session_id, audio_buffer):
+    def process_audio_async(session_id, audio_buffer, transcribed_text_override: Optional[str] = None, use_streaming_tts: bool = False):
         """Process audio in background task"""
         import sys
-        print(f"🚀 process_audio_async STARTED for session: {session_id}, buffer size: {len(audio_buffer)}", flush=True)
+        buffer_size = len(audio_buffer) if audio_buffer else 0
+        print(f"🚀 process_audio_async STARTED for session: {session_id}, buffer size: {buffer_size}", flush=True)
         sys.stdout.flush()
         # Use the stored Flask app instance for application context
         print(f"🔧 Entering Flask app context...", flush=True)
@@ -1576,31 +1937,34 @@ def init_socketio(socketio_instance: SocketIO, app):
                 print(f"🎧 Processing audio: {len(audio_buffer)} bytes")
                 sentry_capture_voice_event("audio_processing_started", session_id, session.get('user_id'), details={"buffer_size": len(audio_buffer)})
                 
-                # Step 1: Transcribe audio using AssemblyAI
-                socketio.emit('status', {'message': 'Transcribing with Deepgram...'}, namespace='/voice', room=session_id)
-                sentry_capture_voice_event("transcription_started", session_id, session.get('user_id'), details={"method": "deepgram"})
-                
-                # Use Deepgram for transcription (WebRTC-optimized solution)
-                print(f"🎧 Deepgram: Processing audio buffer: {len(audio_buffer)} bytes")
-                
-                # Use Deepgram integration with fixed English language (no auto-detection)
-                # STT should be forced to English to avoid mis-detecting other languages
-                import sys
-                print(f"🔧 About to call transcribe_audio_with_deepgram_webrtc with language='en'...", flush=True)
-                sys.stdout.flush()
-                try:
-                    # Force English transcription only (disable auto-detection)
-                    transcribed_text = transcribe_audio_with_deepgram_webrtc(audio_buffer, language="en")
-                    print(f"✅ transcribe_audio_with_deepgram_webrtc returned: {transcribed_text[:50] if transcribed_text else 'None'}...", flush=True)
+                # Step 1: Transcribe audio (skip if streaming STT already provided text)
+                if transcribed_text_override:
+                    transcribed_text = transcribed_text_override
+                else:
+                    socketio.emit('status', {'message': 'Transcribing with Deepgram...'}, namespace='/voice', room=session_id)
+                    sentry_capture_voice_event("transcription_started", session_id, session.get('user_id'), details={"method": "deepgram"})
+                    
+                    # Use Deepgram for transcription (WebRTC-optimized solution)
+                    print(f"🎧 Deepgram: Processing audio buffer: {len(audio_buffer) if audio_buffer else 0} bytes")
+                    
+                    # Use Deepgram integration with fixed English language (no auto-detection)
+                    # STT should be forced to English to avoid mis-detecting other languages
+                    import sys
+                    print(f"🔧 About to call transcribe_audio_with_deepgram_webrtc with language='en'...", flush=True)
                     sys.stdout.flush()
-                except Exception as e:
-                    print(f"❌ Deepgram integration failed: {e}", flush=True)
-                    sys.stdout.flush()
-                    import traceback
-                    traceback.print_exc()
-                    socketio.emit('error', {'message': 'Deepgram service not available. Please check configuration.'}, namespace='/voice', room=session_id)
-                    sentry_capture_voice_event("transcription_failed", session_id, session.get('user_id'), details={"method": "deepgram", "error": str(e)})
-                    return
+                    try:
+                        # Force English transcription only (disable auto-detection)
+                        transcribed_text = transcribe_audio_with_deepgram_webrtc(audio_buffer, language="en")
+                        print(f"✅ transcribe_audio_with_deepgram_webrtc returned: {transcribed_text[:50] if transcribed_text else 'None'}...", flush=True)
+                        sys.stdout.flush()
+                    except Exception as e:
+                        print(f"❌ Deepgram integration failed: {e}", flush=True)
+                        sys.stdout.flush()
+                        import traceback
+                        traceback.print_exc()
+                        socketio.emit('error', {'message': 'Deepgram service not available. Please check configuration.'}, namespace='/voice', room=session_id)
+                        sentry_capture_voice_event("transcription_failed", session_id, session.get('user_id'), details={"method": "deepgram", "error": str(e)})
+                        return
                 
                 print(f"🔍 Checking if transcribed_text is empty...", flush=True)
                 sys.stdout.flush()
@@ -1724,28 +2088,29 @@ def init_socketio(socketio_instance: SocketIO, app):
                 print(f"✅ Status message emitted", flush=True)
                 sys.stdout.flush()
 
-                # LATENCY OPTIMIZATION: Send a short acknowledgement audio ASAP
-                # This helps callers hear something within a few seconds while the agent is thinking.
-                try:
-                    ack_text = "One moment while I check that."
-                    deepgram_tts = get_deepgram_tts_service()
-                    if deepgram_tts:
-                        ack_audio = deepgram_tts.synthesize_speech(ack_text, voice="aura-asteria-en")
-                        if ack_audio:
-                            ack_base64 = base64.b64encode(ack_audio).decode('utf-8')
-                            emit_socketio = socketio if socketio else (socketio_instance_global if 'socketio_instance_global' in globals() else None)
-                            if emit_socketio:
-                                emit_socketio.emit('audio_chunk', {
-                                    'success': True,
-                                    'chunk_index': 0,
-                                    'total_chunks': 1,
-                                    'audio': ack_base64,
-                                    'is_final': True,
-                                    'is_ack': True
-                                }, namespace='/voice', room=session_id)
-                                print("📤 Emitted acknowledgement audio chunk", flush=True)
-                except Exception as ack_error:
-                    print(f"⚠️ Ack audio generation failed: {ack_error}", flush=True)
+                # LATENCY OPTIMIZATION: Send a short acknowledgement audio ASAP (batch TTS only)
+                # For streaming TTS, we skip this to avoid overlapping audio.
+                if not use_streaming_tts:
+                    try:
+                        ack_text = "One moment while I check that."
+                        deepgram_tts = get_deepgram_tts_service()
+                        if deepgram_tts:
+                            ack_audio = deepgram_tts.synthesize_speech(ack_text, voice="aura-asteria-en")
+                            if ack_audio:
+                                ack_base64 = base64.b64encode(ack_audio).decode('utf-8')
+                                emit_socketio = socketio if socketio else (socketio_instance_global if 'socketio_instance_global' in globals() else None)
+                                if emit_socketio:
+                                    emit_socketio.emit('audio_chunk', {
+                                        'success': True,
+                                        'chunk_index': 0,
+                                        'total_chunks': 1,
+                                        'audio': ack_base64,
+                                        'is_final': True,
+                                        'is_ack': True
+                                    }, namespace='/voice', room=session_id)
+                                    print("📤 Emitted acknowledgement audio chunk", flush=True)
+                    except Exception as ack_error:
+                        print(f"⚠️ Ack audio generation failed: {ack_error}", flush=True)
                 
                 print(f"📝 About to call sentry_capture_voice_event for agent_processing_started...", flush=True)
                 sys.stdout.flush()
@@ -1795,13 +2160,36 @@ def init_socketio(socketio_instance: SocketIO, app):
                     'first_sentence': None,
                     'first_sentence_ready': threading.Event(),
                     'tts_started': False,
+                    'tts_started_event': threading.Event(),
                     'early_audio_chunks': [],
                     'early_chunk_index': 0
                 }
+
+                # Streaming TTS (Deepgram) for full-duplex low latency
+                streaming_tts = None
+                response_cancel_event = threading.Event()
+                if use_streaming_tts and STREAMING_TTS_ENABLED and DEEPGRAM_STREAMING_AVAILABLE:
+                    try:
+                        streaming_tts = StreamingTTSStream(session_id, socketio, STREAMING_TTS_MODEL)
+                        streaming_tts.start()
+                        register_active_response(session_id, response_cancel_event, streaming_tts)
+                    except Exception as stream_tts_error:
+                        print(f"⚠️ Failed to start streaming TTS: {stream_tts_error}", flush=True)
+                        streaming_tts = None
                 
                 # Define text chunk callback for early TTS (must be defined before run_async_in_thread)
                 def text_chunk_callback(chunk_text: str):
-                    """Callback to accumulate text chunks and trigger early TTS on first sentence"""
+                    """Callback to accumulate text chunks and trigger early/streaming TTS"""
+                    if response_cancel_event.is_set():
+                        return
+
+                    # Streaming TTS path: pipe text directly to Deepgram
+                    if streaming_tts:
+                        streaming_tts.send_text(chunk_text)
+                        text_accumulator['tts_started'] = True
+                        text_accumulator['tts_started_event'].set()
+                        return
+
                     with text_accumulator['lock']:
                         text_accumulator['text'] += chunk_text
                         current_text = text_accumulator['text']
@@ -1970,18 +2358,21 @@ def init_socketio(socketio_instance: SocketIO, app):
                         print(f"✅ Task submitted to executor, future created", flush=True)
                         sys.stdout.flush()
                         
-                        # LATENCY OPTIMIZATION: Wait for first sentence and start TTS early
-                        # This allows TTS to start while agent is still processing (tool execution, etc.)
-                        print(f"⏳ Waiting for first sentence (max 10s)...", flush=True)
-                        first_sentence_ready = text_accumulator['first_sentence_ready'].wait(timeout=10.0)
-                        
-                        if first_sentence_ready and text_accumulator['first_sentence']:
-                            first_sentence = text_accumulator['first_sentence']
-                            print(f"✅ First sentence ready! Starting early TTS: {first_sentence[:80]}...", flush=True)
-                            # Start early TTS generation in background thread
-                            early_tts_future = executor.submit(generate_early_tts, first_sentence)
+                        if streaming_tts:
+                            print("🔊 Streaming TTS active - skipping early sentence TTS", flush=True)
                         else:
-                            print(f"⏳ First sentence not ready yet, continuing...", flush=True)
+                            # LATENCY OPTIMIZATION: Wait for first sentence and start TTS early
+                            # This allows TTS to start while agent is still processing (tool execution, etc.)
+                            print(f"⏳ Waiting for first sentence (max 10s)...", flush=True)
+                            first_sentence_ready = text_accumulator['first_sentence_ready'].wait(timeout=10.0)
+                            
+                            if first_sentence_ready and text_accumulator['first_sentence']:
+                                first_sentence = text_accumulator['first_sentence']
+                                print(f"✅ First sentence ready! Starting early TTS: {first_sentence[:80]}...", flush=True)
+                                # Start early TTS generation in background thread
+                                early_tts_future = executor.submit(generate_early_tts, first_sentence)
+                            else:
+                                print(f"⏳ First sentence not ready yet, continuing...", flush=True)
                         
                         # Use 60s timeout to allow for tool execution (database operations, API calls)
                         # Tool execution (MCP calls, API calls, database operations) can take time
@@ -2045,222 +2436,227 @@ def init_socketio(socketio_instance: SocketIO, app):
                         print("Transfer marker detected but caller did not request a human. Ignoring marker.")
                         agent_response = agent_response if not isinstance(agent_response, str) or not agent_response.startswith("TRANSFER_INITIATED:") else "Let me know how else I can help."
                 
-                # Step 3: Convert response to speech using streaming chunks (ElevenLabs with Deepgram fallback)
-                # Note: TTS settings were prepared earlier (before agent processing) for early TTS
-                # Check if early TTS was already started
-                early_tts_started = False
-                with text_accumulator['lock']:
-                    early_tts_started = len(text_accumulator['early_audio_chunks']) > 0
-                
-                if not early_tts_started:
-                    socketio.emit('status', {'message': 'Generating speech...'}, namespace='/voice', room=session_id)
-                sentry_capture_voice_event("tts_generation_started", session_id, session.get('user_id'))
-                
-                # Detect emotion now that we have full response (for remaining chunks)
-                if emotion_enabled and not emotion:
-                    try:
-                        emotion_detector = get_emotion_detector()
-                        user_input_text = transcribed_text if 'transcribed_text' in locals() else ""
-                        emotion = emotion_detector.detect_emotion_from_context(
-                            user_input=user_input_text,
-                            agent_response=agent_response
-                        )
-                        print(f"🎭 Using ElevenLabs with emotion: {emotion.value}", flush=True)
-                    except Exception as e:
-                        print(f"⚠️ Emotion detection failed: {e}", flush=True)
-                
-                # Split text into chunks for streaming
-                text_chunks = chunk_text_by_sentences(agent_response, min_chunk_size=100, max_chunk_size=400)
-                print(f"📝 Split response into {len(text_chunks)} chunks for streaming TTS", flush=True)
-                
-                # Check if first chunk matches early TTS sentence (skip if already generated)
-                skip_first_chunk = False
-                if early_tts_started and text_accumulator['first_sentence']:
-                    first_chunk = text_chunks[0] if text_chunks else ""
-                    # Check if first chunk starts with the early sentence
-                    if first_chunk.startswith(text_accumulator['first_sentence'][:50]):
-                        skip_first_chunk = True
-                        print(f"⏭️ Skipping first chunk (already generated via early TTS)", flush=True)
-                
-                # Track if we're using streaming mode
-                is_streaming = len(text_chunks) > 1
-                
-                # For very short responses (single chunk), use original non-streaming approach for simplicity
-                # For longer responses, stream chunks
-                if not is_streaming:
-                    # Short response - use original approach
-                    print(f"🔊 Short response ({len(agent_response)} chars), using non-streaming TTS", flush=True)
-                    audio_bytes = None
-                    
-                    if use_elevenlabs:
-                        try:
-                            elevenlabs = get_elevenlabs_service()
-                            if emotion_enabled and emotion:
-                                audio_bytes = elevenlabs.synthesize_with_emotion(
-                                    text=agent_response,
-                                    emotion=emotion,
-                                    voice_id=voice_id
-                                )
-                            elif language != "en":
-                                audio_bytes = elevenlabs.synthesize_multilingual(
-                                    text=agent_response,
-                                    language=language,
-                                    voice_id=voice_id
-                                )
-                            else:
-                                audio_bytes = elevenlabs.synthesize(
-                                    text=agent_response,
-                                    voice_id=voice_id
-                                )
-                        except Exception as e:
-                            print(f"⚠️ ElevenLabs TTS failed, falling back to Deepgram: {e}", flush=True)
-                            use_elevenlabs = False
-                    
-                    if not audio_bytes:
-                        deepgram_tts = get_deepgram_tts_service()
-                        audio_bytes = deepgram_tts.synthesize_speech(agent_response, voice="aura-asteria-en")
-                        tts_provider = "deepgram"
-                    
-                    if not audio_bytes:
-                        raise Exception(f"{tts_provider.capitalize()} TTS failed to generate audio")
-                    
-                    audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
-                    print(f"🔊 TTS generated: {len(audio_bytes)} bytes, base64: {len(audio_base64)} chars", flush=True)
-                    sentry_capture_voice_event("tts_generation_completed", session_id, session.get('user_id'), details={"audio_size": len(audio_base64), "chunks": 1})
+                if streaming_tts:
+                    streaming_tts.flush_and_close()
+                    audio_base64 = ""
+                    is_streaming = True
+                    sentry_capture_voice_event("tts_generation_completed", session_id, session.get('user_id'), details={"audio_size": 0, "chunks": streaming_tts.chunk_index, "streaming": True})
                 else:
-                    # Long response - stream chunks
-                    print(f"🔊 Long response ({len(agent_response)} chars, {len(text_chunks)} chunks), using streaming TTS", flush=True)
+                    # Step 3: Convert response to speech using streaming chunks (ElevenLabs with Deepgram fallback)
+                    # Note: TTS settings were prepared earlier (before agent processing) for early TTS
+                    # Check if early TTS was already started
+                    early_tts_started = False
+                    with text_accumulator['lock']:
+                        early_tts_started = len(text_accumulator['early_audio_chunks']) > 0
                     
-                    # Send text immediately (for transcript display)
-                    # We'll send audio chunks separately
-                    audio_base64 = ""  # Will accumulate for fallback/pending storage
-                    all_audio_chunks = []
-                    chunk_errors = []
+                    if not early_tts_started:
+                        socketio.emit('status', {'message': 'Generating speech...'}, namespace='/voice', room=session_id)
+                    sentry_capture_voice_event("tts_generation_started", session_id, session.get('user_id'))
                     
-                    # Initialize TTS service
-                    elevenlabs_service = None
-                    deepgram_tts_service = None
-                    if use_elevenlabs:
+                    # Detect emotion now that we have full response (for remaining chunks)
+                    if emotion_enabled and not emotion:
                         try:
-                            elevenlabs_service = get_elevenlabs_service()
-                            if not elevenlabs_service or not elevenlabs_service.is_available():
+                            emotion_detector = get_emotion_detector()
+                            user_input_text = transcribed_text if 'transcribed_text' in locals() else ""
+                            emotion = emotion_detector.detect_emotion_from_context(
+                                user_input=user_input_text,
+                                agent_response=agent_response
+                            )
+                            print(f"🎭 Using ElevenLabs with emotion: {emotion.value}", flush=True)
+                        except Exception as e:
+                            print(f"⚠️ Emotion detection failed: {e}", flush=True)
+                    
+                    # Split text into chunks for streaming
+                    text_chunks = chunk_text_by_sentences(agent_response, min_chunk_size=100, max_chunk_size=400)
+                    print(f"📝 Split response into {len(text_chunks)} chunks for streaming TTS", flush=True)
+                    
+                    # Check if first chunk matches early TTS sentence (skip if already generated)
+                    skip_first_chunk = False
+                    if early_tts_started and text_accumulator['first_sentence']:
+                        first_chunk = text_chunks[0] if text_chunks else ""
+                        # Check if first chunk starts with the early sentence
+                        if first_chunk.startswith(text_accumulator['first_sentence'][:50]):
+                            skip_first_chunk = True
+                            print(f"⏭️ Skipping first chunk (already generated via early TTS)", flush=True)
+                    
+                    # Track if we're using streaming mode
+                    is_streaming = len(text_chunks) > 1
+                    
+                    # For very short responses (single chunk), use original non-streaming approach for simplicity
+                    # For longer responses, stream chunks
+                    if not is_streaming:
+                        # Short response - use original approach
+                        print(f"🔊 Short response ({len(agent_response)} chars), using non-streaming TTS", flush=True)
+                        audio_bytes = None
+                    
+                        if use_elevenlabs:
+                            try:
+                                elevenlabs = get_elevenlabs_service()
+                                if emotion_enabled and emotion:
+                                    audio_bytes = elevenlabs.synthesize_with_emotion(
+                                        text=agent_response,
+                                        emotion=emotion,
+                                        voice_id=voice_id
+                                    )
+                                elif language != "en":
+                                    audio_bytes = elevenlabs.synthesize_multilingual(
+                                        text=agent_response,
+                                        language=language,
+                                        voice_id=voice_id
+                                    )
+                                else:
+                                    audio_bytes = elevenlabs.synthesize(
+                                        text=agent_response,
+                                        voice_id=voice_id
+                                    )
+                            except Exception as e:
+                                print(f"⚠️ ElevenLabs TTS failed, falling back to Deepgram: {e}", flush=True)
                                 use_elevenlabs = False
-                                tts_provider = "deepgram"
-                        except:
-                            use_elevenlabs = False
+                    
+                        if not audio_bytes:
+                            deepgram_tts = get_deepgram_tts_service()
+                            audio_bytes = deepgram_tts.synthesize_speech(agent_response, voice="aura-asteria-en")
                             tts_provider = "deepgram"
                     
-                    if not use_elevenlabs:
-                        deepgram_tts_service = get_deepgram_tts_service()
+                        if not audio_bytes:
+                            raise Exception(f"{tts_provider.capitalize()} TTS failed to generate audio")
                     
-                    # Process each chunk (skip first if already generated via early TTS)
-                    start_idx = 1 if skip_first_chunk else 0
-                    chunk_offset = 1 if skip_first_chunk else 0  # Offset for chunk_index in emit
-                    
-                    for chunk_idx, text_chunk in enumerate(text_chunks[start_idx:], start=start_idx):
-                        try:
-                            chunk_audio = None
-                            
-                            if use_elevenlabs and elevenlabs_service:
-                                try:
-                                    if emotion_enabled and emotion:
-                                        chunk_audio = elevenlabs_service.synthesize_with_emotion(
-                                            text=text_chunk,
-                                            emotion=emotion,
-                                            voice_id=voice_id
-                                        )
-                                    elif language != "en":
-                                        chunk_audio = elevenlabs_service.synthesize_multilingual(
-                                            text=text_chunk,
-                                            language=language,
-                                            voice_id=voice_id
-                                        )
-                                    else:
-                                        chunk_audio = elevenlabs_service.synthesize(
-                                            text=text_chunk,
-                                            voice_id=voice_id
-                                        )
-                                except Exception as e:
-                                    print(f"⚠️ ElevenLabs chunk {chunk_idx+1}/{len(text_chunks)} failed: {e}", flush=True)
-                                    chunk_audio = None
-                            
-                            if not chunk_audio and deepgram_tts_service:
-                                chunk_audio = deepgram_tts_service.synthesize_speech(text_chunk, voice="aura-asteria-en")
-                            
-                            if chunk_audio:
-                                chunk_base64 = base64.b64encode(chunk_audio).decode('utf-8')
-                                all_audio_chunks.append(chunk_base64)
-                                
-                                # Emit this chunk immediately
-                                emit_socketio = socketio if socketio else (socketio_instance_global if 'socketio_instance_global' in globals() else None)
-                                if emit_socketio:
-                                    try:
-                                        emit_socketio.emit('audio_chunk', {
-                                            'success': True,
-                                            'chunk_index': chunk_idx - chunk_offset,  # Adjust index if first chunk was skipped
-                                            'total_chunks': len(text_chunks) - chunk_offset,  # Adjust total if first chunk was skipped
-                                            'audio': chunk_base64,
-                                            'is_final': chunk_idx == len(text_chunks) - 1
-                                        }, namespace='/voice', room=session_id)
-                                        print(f"📤 Emitted audio chunk {chunk_idx+1}/{len(text_chunks)} ({len(chunk_base64)} chars)", flush=True)
-                                    except Exception as emit_error:
-                                        print(f"⚠️ Error emitting chunk {chunk_idx+1}: {emit_error}", flush=True)
-                            else:
-                                chunk_errors.append(chunk_idx)
-                                print(f"⚠️ Failed to generate audio for chunk {chunk_idx+1}", flush=True)
-                        except Exception as chunk_error:
-                            chunk_errors.append(chunk_idx)
-                            print(f"⚠️ Error processing chunk {chunk_idx+1}: {chunk_error}", flush=True)
-                            import traceback
-                            traceback.print_exc()
-                    
-                    # Combine all chunks for fallback/pending storage
-                    if all_audio_chunks:
-                        # Properly combine base64 chunks: decode to binary, concatenate, then re-encode
-                        # (Cannot just concatenate base64 strings - that's invalid!)
-                        combined_audio_binary = b''
-                        
-                        # Include early TTS chunks if they exist (first chunk might have been generated via early TTS)
-                        with text_accumulator['lock']:
-                            early_chunks = text_accumulator.get('early_audio_chunks', [])
-                            if early_chunks:
-                                for early_chunk in early_chunks:
-                                    try:
-                                        combined_audio_binary += base64.b64decode(early_chunk['audio'])
-                                    except Exception as e:
-                                        print(f"⚠️ Error decoding early TTS chunk: {e}", flush=True)
-                        
-                        # Add regular streaming chunks
-                        for chunk_base64 in all_audio_chunks:
-                            try:
-                                combined_audio_binary += base64.b64decode(chunk_base64)
-                            except Exception as e:
-                                print(f"⚠️ Error decoding streaming chunk: {e}", flush=True)
-                        
-                        # Re-encode to base64
-                        audio_base64 = base64.b64encode(combined_audio_binary).decode('utf-8')
-                        print(f"🔊 Streaming TTS completed: {len(all_audio_chunks)} chunks, {len(audio_base64)} total chars (properly combined)", flush=True)
-                        if chunk_errors:
-                            print(f"⚠️ {len(chunk_errors)} chunks failed: {chunk_errors}", flush=True)
-                        
-                        # Emit completion event
-                        emit_socketio = socketio if socketio else (socketio_instance_global if 'socketio_instance_global' in globals() else None)
-                        if emit_socketio:
-                            try:
-                                emit_socketio.emit('audio_stream_complete', {
-                                    'success': len(chunk_errors) == 0,
-                                    'total_chunks': len(text_chunks),
-                                    'successful_chunks': len(all_audio_chunks),
-                                    'failed_chunks': len(chunk_errors)
-                                }, namespace='/voice', room=session_id)
-                            except:
-                                pass
-                        
-                        sentry_capture_voice_event("tts_generation_completed", session_id, session.get('user_id'), 
-                                                  details={"audio_size": len(audio_base64), "chunks": len(all_audio_chunks), "streaming": True})
+                        audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
+                        print(f"🔊 TTS generated: {len(audio_bytes)} bytes, base64: {len(audio_base64)} chars", flush=True)
+                        sentry_capture_voice_event("tts_generation_completed", session_id, session.get('user_id'), details={"audio_size": len(audio_base64), "chunks": 1})
                     else:
-                        raise Exception(f"{tts_provider.capitalize()} TTS failed to generate audio for all chunks")
-                
+                        # Long response - stream chunks
+                        print(f"🔊 Long response ({len(agent_response)} chars, {len(text_chunks)} chunks), using streaming TTS", flush=True)
+                    
+                        # Send text immediately (for transcript display)
+                        # We'll send audio chunks separately
+                        audio_base64 = ""  # Will accumulate for fallback/pending storage
+                        all_audio_chunks = []
+                        chunk_errors = []
+                    
+                        # Initialize TTS service
+                        elevenlabs_service = None
+                        deepgram_tts_service = None
+                        if use_elevenlabs:
+                            try:
+                                elevenlabs_service = get_elevenlabs_service()
+                                if not elevenlabs_service or not elevenlabs_service.is_available():
+                                    use_elevenlabs = False
+                                    tts_provider = "deepgram"
+                            except:
+                                use_elevenlabs = False
+                                tts_provider = "deepgram"
+                    
+                        if not use_elevenlabs:
+                            deepgram_tts_service = get_deepgram_tts_service()
+                    
+                        # Process each chunk (skip first if already generated via early TTS)
+                        start_idx = 1 if skip_first_chunk else 0
+                        chunk_offset = 1 if skip_first_chunk else 0  # Offset for chunk_index in emit
+                    
+                        for chunk_idx, text_chunk in enumerate(text_chunks[start_idx:], start=start_idx):
+                            try:
+                                chunk_audio = None
+                    
+                                if use_elevenlabs and elevenlabs_service:
+                                    try:
+                                        if emotion_enabled and emotion:
+                                            chunk_audio = elevenlabs_service.synthesize_with_emotion(
+                                                text=text_chunk,
+                                                emotion=emotion,
+                                                voice_id=voice_id
+                                            )
+                                        elif language != "en":
+                                            chunk_audio = elevenlabs_service.synthesize_multilingual(
+                                                text=text_chunk,
+                                                language=language,
+                                                voice_id=voice_id
+                                            )
+                                        else:
+                                            chunk_audio = elevenlabs_service.synthesize(
+                                                text=text_chunk,
+                                                voice_id=voice_id
+                                            )
+                                    except Exception as e:
+                                        print(f"⚠️ ElevenLabs chunk {chunk_idx+1}/{len(text_chunks)} failed: {e}", flush=True)
+                                        chunk_audio = None
+                    
+                                if not chunk_audio and deepgram_tts_service:
+                                    chunk_audio = deepgram_tts_service.synthesize_speech(text_chunk, voice="aura-asteria-en")
+                    
+                                if chunk_audio:
+                                    chunk_base64 = base64.b64encode(chunk_audio).decode('utf-8')
+                                    all_audio_chunks.append(chunk_base64)
+                    
+                                    # Emit this chunk immediately
+                                    emit_socketio = socketio if socketio else (socketio_instance_global if 'socketio_instance_global' in globals() else None)
+                                    if emit_socketio:
+                                        try:
+                                            emit_socketio.emit('audio_chunk', {
+                                                'success': True,
+                                                'chunk_index': chunk_idx - chunk_offset,  # Adjust index if first chunk was skipped
+                                                'total_chunks': len(text_chunks) - chunk_offset,  # Adjust total if first chunk was skipped
+                                                'audio': chunk_base64,
+                                                'is_final': chunk_idx == len(text_chunks) - 1
+                                            }, namespace='/voice', room=session_id)
+                                            print(f"📤 Emitted audio chunk {chunk_idx+1}/{len(text_chunks)} ({len(chunk_base64)} chars)", flush=True)
+                                        except Exception as emit_error:
+                                            print(f"⚠️ Error emitting chunk {chunk_idx+1}: {emit_error}", flush=True)
+                                else:
+                                    chunk_errors.append(chunk_idx)
+                                    print(f"⚠️ Failed to generate audio for chunk {chunk_idx+1}", flush=True)
+                            except Exception as chunk_error:
+                                chunk_errors.append(chunk_idx)
+                                print(f"⚠️ Error processing chunk {chunk_idx+1}: {chunk_error}", flush=True)
+                                import traceback
+                                traceback.print_exc()
+                    
+                        # Combine all chunks for fallback/pending storage
+                        if all_audio_chunks:
+                            # Properly combine base64 chunks: decode to binary, concatenate, then re-encode
+                            # (Cannot just concatenate base64 strings - that's invalid!)
+                            combined_audio_binary = b''
+                    
+                            # Include early TTS chunks if they exist (first chunk might have been generated via early TTS)
+                            with text_accumulator['lock']:
+                                early_chunks = text_accumulator.get('early_audio_chunks', [])
+                                if early_chunks:
+                                    for early_chunk in early_chunks:
+                                        try:
+                                            combined_audio_binary += base64.b64decode(early_chunk['audio'])
+                                        except Exception as e:
+                                            print(f"⚠️ Error decoding early TTS chunk: {e}", flush=True)
+                    
+                            # Add regular streaming chunks
+                            for chunk_base64 in all_audio_chunks:
+                                try:
+                                    combined_audio_binary += base64.b64decode(chunk_base64)
+                                except Exception as e:
+                                    print(f"⚠️ Error decoding streaming chunk: {e}", flush=True)
+                    
+                            # Re-encode to base64
+                            audio_base64 = base64.b64encode(combined_audio_binary).decode('utf-8')
+                            print(f"🔊 Streaming TTS completed: {len(all_audio_chunks)} chunks, {len(audio_base64)} total chars (properly combined)", flush=True)
+                            if chunk_errors:
+                                print(f"⚠️ {len(chunk_errors)} chunks failed: {chunk_errors}", flush=True)
+                    
+                            # Emit completion event
+                            emit_socketio = socketio if socketio else (socketio_instance_global if 'socketio_instance_global' in globals() else None)
+                            if emit_socketio:
+                                try:
+                                    emit_socketio.emit('audio_stream_complete', {
+                                        'success': len(chunk_errors) == 0,
+                                        'total_chunks': len(text_chunks),
+                                        'successful_chunks': len(all_audio_chunks),
+                                        'failed_chunks': len(chunk_errors)
+                                    }, namespace='/voice', room=session_id)
+                                except:
+                                    pass
+                    
+                            sentry_capture_voice_event("tts_generation_completed", session_id, session.get('user_id'), 
+                                                      details={"audio_size": len(audio_base64), "chunks": len(all_audio_chunks), "streaming": True})
+                        else:
+                            raise Exception(f"{tts_provider.capitalize()} TTS failed to generate audio for all chunks")
                 # Send response to client
                 print(f"📤 Sending agent_response event to session {session_id}...", flush=True)
                 print(f"📤 Response text length: {len(agent_response)}, audio base64 length: {len(audio_base64)}", flush=True)
@@ -2500,6 +2896,8 @@ def init_socketio(socketio_instance: SocketIO, app):
                             pass
                 
                 sentry_capture_voice_event("audio_processing_completed", session_id, session.get('user_id'), details={"success": True})
+                if session_id in active_response_controls:
+                    active_response_controls.pop(session_id, None)
             
             except Exception as e:
                 print(f"❌ Error processing audio: {e}")
@@ -2509,6 +2907,8 @@ def init_socketio(socketio_instance: SocketIO, app):
                 sentry_capture_voice_event("audio_processing_error", session_id, session.get('user_id') if 'session' in locals() else None, details={"error": str(e)})
                 if SENTRY_AVAILABLE:
                     sentry_sdk.capture_exception(e)
+                if session_id in active_response_controls:
+                    active_response_controls.pop(session_id, None)
                 
                 socketio.emit('error', {
                     'message': f"Error processing audio: {str(e)}"
@@ -2547,7 +2947,7 @@ async def process_with_agent(
         
         # LATENCY OPTIMIZATION: Use Claude Haiku (faster model) for voice responses
         # Claude Haiku is ~2-3x faster than Sonnet 4, reducing agent processing time from ~5s to ~2-3s
-        voice_model = "claude-3-5-haiku-20241022"  # Faster model for voice responses
+        voice_model = VOICE_MODEL  # Faster model for voice responses
         
         # Use the same agent processing function as Twilio, but with faster model for voice
         result = await _run_agent_async(

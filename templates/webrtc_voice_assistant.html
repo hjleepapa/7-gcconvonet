@@ -260,6 +260,9 @@
         let isPlayingAudioChunks = false;
         let currentAudioPlayback = null;
         
+        // Enable streaming STT (send audio chunks while recording)
+        const STREAMING_STT_ENABLED = true;
+        
         // Initialize Socket.IO connection
         function initSocket() {
             console.log('🔌 Initializing Socket.IO connection...');
@@ -565,6 +568,22 @@
                 }
             });
             
+            // Stop audio playback immediately (barge-in / interruption)
+            socket.on('stop_audio', (data) => {
+                console.log('🛑 stop_audio received:', data);
+                audioChunkQueue = [];
+                isPlayingAudioChunks = false;
+                if (currentAudioPlayback) {
+                    try {
+                        currentAudioPlayback.pause();
+                        currentAudioPlayback.currentTime = 0;
+                    } catch (e) {
+                        console.warn('⚠️ Error stopping current audio:', e);
+                    }
+                }
+                currentAudioPlayback = null;
+            });
+            
             socket.on('audio_stream_complete', (data) => {
                 console.log('✅ ===== audio_stream_complete =====');
                 console.log('✅ Total chunks:', data.total_chunks);
@@ -692,6 +711,16 @@
                     if (event.data.size > 0) {
                         audioChunks.push(event.data);
                         console.log(`📦 Audio chunk received: ${event.data.size} bytes`);
+                        
+                        // Stream chunks to server for low-latency STT
+                        if (STREAMING_STT_ENABLED) {
+                            const reader = new FileReader();
+                            reader.onload = () => {
+                                const base64 = reader.result.split(',')[1];
+                                socket.emit('audio_data', { audio: base64 });
+                            };
+                            reader.readAsDataURL(event.data);
+                        }
                     }
                 };
                 
@@ -703,14 +732,19 @@
                     const audioBlob = new Blob(audioChunks, { type: 'audio/webm;codecs=opus' });
                     console.log(`🎵 Complete audio blob: ${audioBlob.size} bytes`);
                     
-                    // Send complete blob to server
-                    const reader = new FileReader();
-                    reader.onload = () => {
-                        const base64 = reader.result.split(',')[1];
-                        console.log(`📤 Sending complete audio: ${base64.length} chars`);
-                        socket.emit('stop_recording', { audio: base64 });
-                    };
-                    reader.readAsDataURL(audioBlob);
+                    if (STREAMING_STT_ENABLED) {
+                        // For streaming STT, just signal stop
+                        socket.emit('stop_recording');
+                    } else {
+                        // Send complete blob to server (batch mode)
+                        const reader = new FileReader();
+                        reader.onload = () => {
+                            const base64 = reader.result.split(',')[1];
+                            console.log(`📤 Sending complete audio: ${base64.length} chars`);
+                            socket.emit('stop_recording', { audio: base64 });
+                        };
+                        reader.readAsDataURL(audioBlob);
+                    }
                 };
                 
                 // Start recording
