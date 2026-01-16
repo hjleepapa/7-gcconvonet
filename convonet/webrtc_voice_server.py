@@ -10,6 +10,7 @@ import base64
 import time
 import re
 import threading
+import struct
 from typing import Optional
 from uuid import UUID
 from urllib.parse import quote
@@ -164,6 +165,9 @@ class StreamingTTSStream:
 
     def _emit_audio_chunk(self, chunk_bytes: bytes):
         try:
+            # Deepgram streaming TTS returns raw PCM (linear16); wrap as WAV for browser decode.
+            if not (chunk_bytes[:4] == b'RIFF' and b'WAVE' in chunk_bytes[:12]):
+                chunk_bytes = self._wrap_linear16_wav(chunk_bytes, sample_rate=24000, channels=1, sample_width=2)
             chunk_base64 = base64.b64encode(chunk_bytes).decode('utf-8')
             self.socketio.emit('audio_chunk', {
                 'success': True,
@@ -175,6 +179,32 @@ class StreamingTTSStream:
             self.chunk_index += 1
         except Exception as emit_error:
             print(f"⚠️ Error emitting streaming TTS chunk: {emit_error}", flush=True)
+
+    @staticmethod
+    def _wrap_linear16_wav(pcm_bytes: bytes, sample_rate: int, channels: int, sample_width: int) -> bytes:
+        """Wrap raw PCM bytes in a WAV header for browser playback."""
+        data_size = len(pcm_bytes)
+        byte_rate = sample_rate * channels * sample_width
+        block_align = channels * sample_width
+        bits_per_sample = sample_width * 8
+        riff_size = 36 + data_size
+        header = struct.pack(
+            '<4sI4s4sIHHIIHH4sI',
+            b'RIFF',
+            riff_size,
+            b'WAVE',
+            b'fmt ',
+            16,
+            1,
+            channels,
+            sample_rate,
+            byte_rate,
+            block_align,
+            bits_per_sample,
+            b'data',
+            data_size
+        )
+        return header + pcm_bytes
 
     def _run_loop(self):
         if not DEEPGRAM_STREAMING_AVAILABLE:
@@ -1873,7 +1903,12 @@ def init_socketio(socketio_instance: SocketIO, app):
         
         # Process audio asynchronously
         sentry_capture_voice_event("audio_processing_started", session_id, details={"buffer_size": len(audio_buffer)})
-        socketio.start_background_task(process_audio_async, session_id, audio_buffer)
+        socketio.start_background_task(
+            process_audio_async,
+            session_id,
+            audio_buffer,
+            use_streaming_tts=(STREAMING_TTS_ENABLED and DEEPGRAM_STREAMING_AVAILABLE)
+        )
     
     
     def send_welcome_greeting(session_id, user_name):

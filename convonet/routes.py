@@ -1795,6 +1795,8 @@ async def _run_agent_async(
         async def process_stream():
             # Import time module explicitly to avoid scoping issues
             # Use 'import time' at function start to ensure it's available
+            last_streamed_text = ""
+            last_streamed_msg_id = None
             import time as time_module
             import asyncio
             import uuid
@@ -2011,27 +2013,45 @@ Your messages are read aloud, so be brief and conversational."""
                                 sys.stdout.flush()
                                 
                                 # STREAMING OPTIMIZATION: Emit text chunks as they arrive
-                                if "messages" in state and socketio and session_id:
+                                if "messages" in state:
+                                    from langchain_core.messages import AIMessage
                                     for msg in state.get("messages", []):
-                                        # Emit text chunks incrementally for lower latency
-                                        if hasattr(msg, 'content') and isinstance(msg.content, str) and msg.content:
-                                            # Only emit if this is a new AI message (not already emitted)
-                                            if isinstance(msg, type) and hasattr(msg, '__class__'):
-                                                from langchain_core.messages import AIMessage
-                                                if isinstance(msg, AIMessage):
-                                                    # Emit to client via Socket.IO
-                                                    socketio.emit(
-                                                        'agent_stream_chunk',
-                                                        {'text': msg.content, 'type': 'text'},
-                                                        namespace='/voice',
-                                                        room=session_id
-                                                    )
-                                                    # Call text_chunk_callback for early TTS (server-side)
-                                                    if text_chunk_callback:
-                                                        try:
-                                                            text_chunk_callback(msg.content)
-                                                        except Exception as callback_error:
-                                                            print(f"⚠️ Error in text_chunk_callback: {callback_error}", flush=True)
+                                        if not isinstance(msg, AIMessage):
+                                            continue
+                                        if not hasattr(msg, 'content') or not isinstance(msg.content, str) or not msg.content:
+                                            continue
+
+                                        # Avoid repeating already streamed text; emit only new suffix
+                                        msg_id = getattr(msg, "id", None)
+                                        if msg_id is not None and msg_id != last_streamed_msg_id:
+                                            last_streamed_msg_id = msg_id
+                                            last_streamed_text = ""
+
+                                        if msg.content.startswith(last_streamed_text):
+                                            delta_text = msg.content[len(last_streamed_text):]
+                                        else:
+                                            delta_text = msg.content
+
+                                        if not delta_text:
+                                            continue
+
+                                        # Emit to client via Socket.IO if available
+                                        if socketio and session_id:
+                                            socketio.emit(
+                                                'agent_stream_chunk',
+                                                {'text': delta_text, 'type': 'text'},
+                                                namespace='/voice',
+                                                room=session_id
+                                            )
+
+                                        # Call text_chunk_callback for early/streaming TTS (server-side)
+                                        if text_chunk_callback:
+                                            try:
+                                                text_chunk_callback(delta_text)
+                                            except Exception as callback_error:
+                                                print(f"⚠️ Error in text_chunk_callback: {callback_error}", flush=True)
+
+                                        last_streamed_text = msg.content
                                 
                                 if "messages" in state:
                                     for msg in state["messages"]:
