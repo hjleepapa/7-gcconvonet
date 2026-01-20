@@ -477,6 +477,20 @@ def build_customer_profile_from_session(session_data: dict | None) -> dict | Non
                     if state and hasattr(state, 'values') and state.values:
                         messages = state.values.get('messages', [])
                         
+                        # Build tool_call_id -> tool_name map for ToolMessage lookups
+                        tool_name_by_id = {}
+                        for msg in messages:
+                            if isinstance(msg, AIMessage) and hasattr(msg, "tool_calls") and msg.tool_calls:
+                                for tc in msg.tool_calls:
+                                    if isinstance(tc, dict):
+                                        tc_id = tc.get("id") or tc.get("tool_call_id")
+                                        tc_name = tc.get("name") or tc.get("functionName") or tc.get("function")
+                                    else:
+                                        tc_id = getattr(tc, "id", getattr(tc, "tool_call_id", None))
+                                        tc_name = getattr(tc, "name", getattr(tc, "functionName", None))
+                                    if tc_id and tc_name:
+                                        tool_name_by_id[tc_id] = tc_name
+
                         # Parse messages into conversation history
                         conversation = []
                         for msg in messages:
@@ -499,7 +513,12 @@ def build_customer_profile_from_session(session_data: dict | None) -> dict | Non
                                 })
                             elif isinstance(msg, ToolMessage):
                                 # Extract activities from tool calls
-                                tool_name = getattr(msg, 'name', None) or 'unknown_tool'
+                                tool_call_id = getattr(msg, "tool_call_id", None)
+                                tool_name = (
+                                    tool_name_by_id.get(tool_call_id)
+                                    or getattr(msg, 'name', None)
+                                    or 'unknown_tool'
+                                )
                                 tool_content = msg.content if hasattr(msg, 'content') else str(msg)
                                 
                                 # Parse tool content to extract activity info
