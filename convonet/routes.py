@@ -1606,6 +1606,27 @@ async def _run_agent_async(
     start_time = time.time()
     monitor = get_agent_monitor()
     
+    def _normalize_tool_call(tc):
+        """Normalize tool call data across providers and message shapes."""
+        if not tc:
+            return None
+        if isinstance(tc, dict):
+            tc_type = tc.get("type")
+            if tc_type and tc_type not in ("tool_use", "tool_call", "tool"):
+                return None
+            tool_id = tc.get("id") or tc.get("tool_call_id")
+            tool_name = tc.get("name") or tc.get("functionName") or tc.get("function") or tc.get("tool_name")
+            args = tc.get("args") or tc.get("arguments") or tc.get("input") or {}
+            if not tool_id and not tool_name:
+                return None
+            return tool_id, tool_name or "unknown", args
+        tool_id = getattr(tc, "id", getattr(tc, "tool_call_id", None))
+        tool_name = getattr(tc, "name", getattr(tc, "functionName", None))
+        args = getattr(tc, "args", getattr(tc, "arguments", None))
+        if tool_id is None and tool_name is None:
+            return None
+        return tool_id or str(uuid.uuid4()), tool_name or "unknown", args or {}
+    
     # Detect mortgage intent from user prompt
     prompt_text = prompt.strip().lower() if prompt else ""
     has_mortgage_intent = detect_mortgage_intent(prompt)
@@ -2064,38 +2085,37 @@ Your messages are read aloud, so be brief and conversational."""
                                                 print(f"🔄 Transfer marker detected in tool result: {transfer_marker}")
                                         
                                         # Track tool calls
+                                        tool_calls_to_process = []
                                         if hasattr(msg, 'tool_calls') and msg.tool_calls:
-                                            for tc in msg.tool_calls:
-                                                if isinstance(tc, dict):
-                                                    tool_id = tc.get('id') or tc.get('tool_call_id')
-                                                    tool_name = tc.get('name') or tc.get('functionName') or tc.get('function') or 'unknown'
-                                                    args = tc.get('args') or tc.get('arguments') or {}
-                                                else:
-                                                    tool_id = getattr(tc, 'id', getattr(tc, 'tool_call_id', None))
-                                                    tool_name = getattr(tc, 'name', getattr(tc, 'functionName', 'unknown'))
-                                                    args = getattr(tc, 'args', getattr(tc, 'arguments', {}))
-                                                if not tool_id:
-                                                    tool_id = str(uuid.uuid4())
-                                                dedupe_key = f"{tool_id}:{tool_name}"
-                                                if dedupe_key in seen_tool_calls:
-                                                    continue
-                                                seen_tool_calls.add(dedupe_key)
-                                                new_tool_calls_in_update += 1
-                                                
-                                                print(f"  → Tool: {tool_name} (id: {tool_id[:20]}...)", flush=True)
-                                                sys.stdout.flush()
-                                                
-                                                if tool_call_callback:
-                                                    try:
-                                                        tool_call_callback(tool_name)
-                                                    except Exception as callback_error:
-                                                        print(f"⚠️ Error in tool_call_callback: {callback_error}", flush=True)
-                                                
-                                                tool_calls_info.append(ToolCallInfo(
-                                                    tool_name=tool_name,
-                                                    tool_id=tool_id,
-                                                    arguments=args if isinstance(args, dict) else {}
-                                                ))
+                                            tool_calls_to_process.extend(msg.tool_calls)
+                                        if hasattr(msg, 'content') and isinstance(msg.content, list):
+                                            tool_calls_to_process.extend(msg.content)
+                                        
+                                        for tc in tool_calls_to_process:
+                                            normalized = _normalize_tool_call(tc)
+                                            if not normalized:
+                                                continue
+                                            tool_id, tool_name, args = normalized
+                                            dedupe_key = f"{tool_id}:{tool_name}"
+                                            if dedupe_key in seen_tool_calls:
+                                                continue
+                                            seen_tool_calls.add(dedupe_key)
+                                            new_tool_calls_in_update += 1
+                                            
+                                            print(f"  → Tool: {tool_name} (id: {tool_id[:20]}...)", flush=True)
+                                            sys.stdout.flush()
+                                            
+                                            if tool_call_callback:
+                                                try:
+                                                    tool_call_callback(tool_name)
+                                                except Exception as callback_error:
+                                                    print(f"⚠️ Error in tool_call_callback: {callback_error}", flush=True)
+                                            
+                                            tool_calls_info.append(ToolCallInfo(
+                                                tool_name=tool_name,
+                                                tool_id=tool_id,
+                                                arguments=args if isinstance(args, dict) else {}
+                                            ))
                                     if new_tool_calls_in_update:
                                         print(f"🔧 Detected {new_tool_calls_in_update} new tool call(s) in state update #{states_processed}", flush=True)
                                         sys.stdout.flush()
@@ -2200,21 +2220,26 @@ Your messages are read aloud, so be brief and conversational."""
             # Process messages and then clear to free memory
             try:
                 for msg in final_messages:
-                    # Track tool calls (AIMessage with tool_calls)
+                    # Track tool calls (AIMessage tool_calls or content tool_use blocks)
+                    tool_calls_to_process = []
                     if hasattr(msg, 'tool_calls') and msg.tool_calls:
-                        for tc in msg.tool_calls:
-                            tool_id = getattr(tc, 'id', getattr(tc, 'tool_call_id', str(uuid.uuid4())))
-                            tool_name = getattr(tc, 'name', getattr(tc, 'functionName', 'unknown'))
-                            args = getattr(tc, 'args', getattr(tc, 'arguments', {}))
-                            
-                            # Check if we already have this tool call
-                            existing = next((t for t in tool_calls_info if t.tool_id == tool_id), None)
-                            if not existing:
-                                tool_calls_info.append(ToolCallInfo(
-                                    tool_name=tool_name,
-                                    tool_id=tool_id,
-                                    arguments=args if isinstance(args, dict) else {}
-                                ))
+                        tool_calls_to_process.extend(msg.tool_calls)
+                    if hasattr(msg, 'content') and isinstance(msg.content, list):
+                        tool_calls_to_process.extend(msg.content)
+                    
+                    for tc in tool_calls_to_process:
+                        normalized = _normalize_tool_call(tc)
+                        if not normalized:
+                            continue
+                        tool_id, tool_name, args = normalized
+                        # Check if we already have this tool call
+                        existing = next((t for t in tool_calls_info if t.tool_id == tool_id), None)
+                        if not existing:
+                            tool_calls_info.append(ToolCallInfo(
+                                tool_name=tool_name,
+                                tool_id=tool_id,
+                                arguments=args if isinstance(args, dict) else {}
+                            ))
                     
                     # Track tool results (ToolMessage)
                     if hasattr(msg, 'tool_call_id') and hasattr(msg, 'content'):
