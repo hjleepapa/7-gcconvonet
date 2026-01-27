@@ -104,7 +104,7 @@ def create_app():
     app.register_blueprint(call_center_bp)
     
     # Register WebRTC voice assistant blueprint
-    from convonet.webrtc_voice_server import webrtc_bp, init_socketio
+    from convonet.webrtc_voice_server_socketio import webrtc_bp, init_socketio
     app.register_blueprint(webrtc_bp)
     
     # Register audio player blueprint

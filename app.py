@@ -100,7 +100,7 @@ def create_app():
 
     # Convonet WebRTC blueprint
     try:
-        from convonet.webrtc_voice_server import webrtc_bp, init_socketio
+        from convonet.webrtc_voice_server_socketio import webrtc_bp, init_socketio
         app.register_blueprint(webrtc_bp)
         init_socketio(socketio, app)
     except ImportError as e:

@@ -90,7 +90,7 @@ def create_app():
     app.register_blueprint(team_todo_bp)
     
     # Register WebRTC voice assistant blueprint
-    from convonet.webrtc_voice_server import webrtc_bp, init_socketio
+    from convonet.webrtc_voice_server_socketio import webrtc_bp, init_socketio
     app.register_blueprint(webrtc_bp)
     
     # Initialize Socket.IO event handlers

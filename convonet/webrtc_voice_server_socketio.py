@@ -16,7 +16,6 @@ from uuid import UUID
 from urllib.parse import quote
 from flask import Blueprint, render_template, request, jsonify
 from flask_socketio import SocketIO, emit, join_room, leave_room
-import jwt
 
 # Apply nest_asyncio to allow nested event loops (needed for eventlet compatibility)
 try:
@@ -850,7 +849,7 @@ def voice_assistant():
     streaming_stt_available = STREAMING_STT_ENABLED and DEEPGRAM_STREAMING_AVAILABLE
     streaming_tts_available = STREAMING_TTS_ENABLED and DEEPGRAM_STREAMING_AVAILABLE
     return render_template(
-        'webrtc_voice_assistant_socketio.html',
+        'webrtc_voice_assistant.html',
         streaming_stt_enabled=streaming_stt_available,
         streaming_tts_enabled=streaming_tts_available,
         livekit_enabled=_livekit_active(),
