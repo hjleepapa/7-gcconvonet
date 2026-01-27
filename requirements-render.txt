@@ -176,6 +176,9 @@ redis>=5.0.0
 # Deepgram SDK for WebRTC speech-to-text
 deepgram-sdk>=3.0.0
 
+# LiveKit server SDK for audio transport
+livekit
+
 # ElevenLabs SDK for TTS with voice cloning, emotions, and multilingual support
 elevenlabs>=1.0.0
 
