@@ -7,7 +7,7 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
-    <script src="https://unpkg.com/livekit-client/dist/livekit-client.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
     <style>
         body {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -209,6 +209,7 @@
         let localAudioTrack = null;
         const livekitAudioElements = new Map();
         let fallbackAudio = null;
+        let livekitSdk = null;
 
         const STREAMING_STT_ENABLED = {{ 'true' if streaming_stt_enabled else 'false' }};
         const STREAMING_TTS_ENABLED = {{ 'true' if streaming_tts_enabled else 'false' }};
@@ -295,19 +296,46 @@
             }
         }
 
+        async function ensureLiveKitLoaded() {
+            if (livekitSdk) {
+                return true;
+            }
+            if (window.LiveKit) {
+                livekitSdk = window.LiveKit;
+                return true;
+            }
+            return new Promise((resolve) => {
+                const script = document.createElement('script');
+                script.src = 'https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js';
+                script.onload = () => {
+                    livekitSdk = window.LiveKit || null;
+                    resolve(Boolean(livekitSdk));
+                };
+                script.onerror = () => resolve(false);
+                document.head.appendChild(script);
+            });
+        }
+
         async function connectLivekit(info) {
             if (livekitConnected || livekitConnecting) return;
             livekitConnecting = true;
             setLivekitStatus('connecting', 'LiveKit: connecting');
 
             try {
-                livekitRoom = new LiveKit.Room({
+                const loaded = await ensureLiveKitLoaded();
+                if (!loaded) {
+                    setLivekitStatus('offline', 'LiveKit: SDK missing');
+                    showStatus('LiveKit client failed to load.', 'error');
+                    return;
+                }
+                const LiveKitClient = livekitSdk;
+                livekitRoom = new LiveKitClient.Room({
                     adaptiveStream: true,
                     dynacast: true,
                 });
 
-                livekitRoom.on(LiveKit.RoomEvent.TrackSubscribed, (track) => {
-                    if (track.kind === LiveKit.Track.Kind.Audio) {
+                livekitRoom.on(LiveKitClient.RoomEvent.TrackSubscribed, (track) => {
+                    if (track.kind === LiveKitClient.Track.Kind.Audio) {
                         const element = track.attach();
                         element.autoplay = true;
                         element.style.display = 'none';
@@ -316,7 +344,7 @@
                     }
                 });
 
-                livekitRoom.on(LiveKit.RoomEvent.TrackUnsubscribed, (track) => {
+                livekitRoom.on(LiveKitClient.RoomEvent.TrackUnsubscribed, (track) => {
                     const element = livekitAudioElements.get(track.sid);
                     if (element) {
                         track.detach(element);
@@ -341,7 +369,10 @@
         async function ensureLocalTrack() {
             if (!livekitRoom) return false;
             if (!localAudioTrack) {
-                localAudioTrack = await LiveKit.createLocalAudioTrack({
+                if (!livekitSdk) {
+                    return false;
+                }
+                localAudioTrack = await livekitSdk.createLocalAudioTrack({
                     echoCancellation: true,
                     noiseSuppression: true,
                     autoGainControl: true,
