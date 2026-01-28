@@ -300,8 +300,8 @@
             if (livekitSdk) {
                 return true;
             }
-            if (window.LiveKit) {
-                livekitSdk = window.LiveKit;
+            if (window.LiveKit || window.LivekitClient) {
+                livekitSdk = window.LiveKit || window.LivekitClient;
                 return true;
             }
 
@@ -311,8 +311,8 @@
             if (localScript) {
                 for (let i = 0; i < 10; i += 1) {
                     await wait(200);
-                    if (window.LiveKit) {
-                        livekitSdk = window.LiveKit;
+                    if (window.LiveKit || window.LivekitClient) {
+                        livekitSdk = window.LiveKit || window.LivekitClient;
                         updateLivekitDebug({ sdk: 'local', status: 'loaded' });
                         return true;
                     }
@@ -337,7 +337,7 @@
                     script.dataset.livekitSrc = src;
                     return await new Promise((resolve) => {
                         script.onload = () => {
-                            livekitSdk = window.LiveKit || null;
+                            livekitSdk = window.LiveKit || window.LivekitClient || null;
                             if (livekitSdk) {
                                 updateLivekitDebug({ sdk: src, status: 'loaded' });
                             }
@@ -365,14 +365,14 @@
             const loadScript = (src) => new Promise((resolve) => {
                 const existing = document.querySelector(`script[data-livekit-src="${src}"]`);
                 if (existing) {
-                    resolve(Boolean(window.LiveKit));
+                    resolve(Boolean(window.LiveKit || window.LivekitClient));
                     return;
                 }
                 const script = document.createElement('script');
                 script.src = src;
                 script.dataset.livekitSrc = src;
                 script.onload = () => {
-                    livekitSdk = window.LiveKit || null;
+                    livekitSdk = window.LiveKit || window.LivekitClient || null;
                     if (livekitSdk) {
                         updateLivekitDebug({ sdk: src, status: 'loaded' });
                     }

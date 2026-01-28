@@ -4,6 +4,7 @@ Provides high-quality audio streaming and real-time speech recognition
 """
 
 import asyncio
+import html
 import json
 import os
 import base64
@@ -120,6 +121,7 @@ LIVEKIT_CLIENT_URLS = [
     "https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js",
     "https://unpkg.com/livekit-client/dist/livekit-client.umd.min.js",
     "https://cdnjs.cloudflare.com/ajax/libs/livekit-client/1.0.23/livekit-client.umd.min.js",
+    "https://app.unpkg.com/livekit-client@1.2.11/files/dist/livekit-client.umd.js",
 ]
 LIVEKIT_CLIENT_JS_CACHE = None
 
@@ -906,11 +908,32 @@ def livekit_client_js():
         print("[livekit] Serving cached client JS")
         return Response(LIVEKIT_CLIENT_JS_CACHE, mimetype="application/javascript")
 
+    def _extract_unpkg_js(raw_text: str) -> Optional[str]:
+        if "<pre" not in raw_text.lower():
+            return None
+        match = re.search(r"<pre[^>]*>(.*?)</pre>", raw_text, re.IGNORECASE | re.DOTALL)
+        if not match:
+            return None
+        extracted = html.unescape(match.group(1)).strip()
+        if extracted.startswith("!function") and "LivekitClient" in extracted:
+            return extracted
+        return None
+
     for url in LIVEKIT_CLIENT_URLS:
         try:
             resp = requests.get(url, timeout=5)
             if resp.status_code == 200 and resp.text:
-                LIVEKIT_CLIENT_JS_CACHE = resp.text
+                body = resp.text
+                if "<pre" in body.lower():
+                    extracted = _extract_unpkg_js(body)
+                    if extracted:
+                        LIVEKIT_CLIENT_JS_CACHE = extracted
+                        print(f"[livekit] Extracted client JS from {url}")
+                        return Response(LIVEKIT_CLIENT_JS_CACHE, mimetype="application/javascript")
+                if body.lstrip().startswith("!function"):
+                    LIVEKIT_CLIENT_JS_CACHE = body
+                else:
+                    LIVEKIT_CLIENT_JS_CACHE = body
                 print(f"[livekit] Fetched client JS from {url}")
                 return Response(LIVEKIT_CLIENT_JS_CACHE, mimetype="application/javascript")
             print(f"[livekit] CDN fetch failed ({resp.status_code}) for {url}")
