@@ -167,9 +167,16 @@ class LiveKitRoomSession:
                 pubs = participant.track_publications
             elif hasattr(participant, "tracks"):
                 pubs = participant.tracks
+            elif hasattr(participant, "audio_track_publications"):
+                pubs = participant.audio_track_publications
+            elif hasattr(participant, "track_publications_by_sid"):
+                pubs = participant.track_publications_by_sid
+            elif hasattr(participant, "publications"):
+                pubs = participant.publications
             if not pubs:
                 try:
-                    print(f"🔎 LiveKit ensure subscribe: no publications for {participant.identity}", flush=True)
+                    debug_attrs = [name for name in dir(participant) if "track" in name or "pub" in name]
+                    print(f"🔎 LiveKit ensure subscribe: no publications for {participant.identity} attrs={debug_attrs}", flush=True)
                 except Exception:
                     pass
                 continue
