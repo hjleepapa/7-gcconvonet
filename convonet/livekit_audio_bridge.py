@@ -69,6 +69,10 @@ class LiveKitRoomSession:
         if enabled:
             self.input_buffer = bytearray()
             self._frame_count = 0
+            try:
+                self._ensure_audio_subscriptions()
+            except Exception:
+                pass
 
     def pop_audio_buffer(self) -> bytes:
         data = bytes(self.input_buffer)
@@ -140,6 +144,31 @@ class LiveKitRoomSession:
             spc = getattr(frame, "samples_per_channel", None)
             print(f"🎧 LiveKit audio frame {self._frame_count}: {len(pcm_bytes)} bytes sr={sample_rate} ch={channels} spc={spc}", flush=True)
 
+    def _ensure_audio_subscriptions(self):
+        """Subscribe to any remote audio track publications (sync or async)."""
+        if not self.room:
+            return
+        participants = getattr(self.room, "remote_participants", {})
+        for _, participant in participants.items():
+            pubs = None
+            if hasattr(participant, "track_publications"):
+                pubs = participant.track_publications
+            elif hasattr(participant, "tracks"):
+                pubs = participant.tracks
+            if not pubs:
+                continue
+            for _, publication in pubs.items():
+                kind = getattr(publication, "kind", None)
+                kind_name = str(kind).lower() if kind is not None else ""
+                if kind == rtc.TrackKind.KIND_AUDIO or "audio" in kind_name:
+                    try:
+                        result = publication.set_subscribed(True)
+                        if asyncio.iscoroutine(result):
+                            asyncio.run_coroutine_threadsafe(result, self.loop)
+                        print(f"✅ LiveKit ensured audio subscribed for {participant.identity}", flush=True)
+                    except Exception as e:
+                        print(f"⚠️ LiveKit ensure subscribe failed: {e}", flush=True)
+
     async def _consume_audio_track(self, track):
         try:
             track_sid = getattr(track, "sid", None)
@@ -165,6 +194,10 @@ class LiveKitRoomSession:
                         if identity:
                             participants.append(identity)
                     print(f"🧭 LiveKit room '{room_name}' participants: {participants}", flush=True)
+                    try:
+                        self._ensure_audio_subscriptions()
+                    except Exception:
+                        pass
                 except Exception:
                     pass
             except Exception:
