@@ -149,6 +149,10 @@ class LiveKitRoomSession:
         if not self.room:
             return
         participants = getattr(self.room, "remote_participants", {})
+        try:
+            print(f"🔎 LiveKit ensure subscribe: participants={len(participants)}", flush=True)
+        except Exception:
+            pass
         for _, participant in participants.items():
             pubs = None
             if hasattr(participant, "track_publications"):
@@ -156,8 +160,31 @@ class LiveKitRoomSession:
             elif hasattr(participant, "tracks"):
                 pubs = participant.tracks
             if not pubs:
+                try:
+                    print(f"🔎 LiveKit ensure subscribe: no publications for {participant.identity}", flush=True)
+                except Exception:
+                    pass
                 continue
-            for _, publication in pubs.items():
+            if isinstance(pubs, dict):
+                pub_items = pubs.items()
+            else:
+                pub_items = enumerate(list(pubs))
+            try:
+                pub_list = []
+                for _, publication in pub_items:
+                    kind = getattr(publication, "kind", None)
+                    pub_list.append(str(kind))
+                print(f"🔎 LiveKit publications for {participant.identity}: {pub_list}", flush=True)
+                if isinstance(pubs, dict):
+                    pub_items = pubs.items()
+                else:
+                    pub_items = enumerate(list(pubs))
+            except Exception:
+                if isinstance(pubs, dict):
+                    pub_items = pubs.items()
+                else:
+                    pub_items = enumerate(list(pubs))
+            for _, publication in pub_items:
                 kind = getattr(publication, "kind", None)
                 kind_name = str(kind).lower() if kind is not None else ""
                 if kind == rtc.TrackKind.KIND_AUDIO or "audio" in kind_name:
