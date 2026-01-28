@@ -47,6 +47,7 @@ class LiveKitRoomSession:
         self.thread = threading.Thread(target=self._run_loop, daemon=True)
         self.ready = threading.Event()
         self._closed = False
+        self._frame_count = 0
 
     def start(self):
         if not LIVEKIT_AVAILABLE:
@@ -66,6 +67,7 @@ class LiveKitRoomSession:
         self.recording_enabled = enabled
         if enabled:
             self.input_buffer = bytearray()
+            self._frame_count = 0
 
     def pop_audio_buffer(self) -> bytes:
         data = bytes(self.input_buffer)
@@ -104,7 +106,20 @@ class LiveKitRoomSession:
             pcm = getattr(frame, "samples", None)
         if pcm is None:
             return
-        self.input_buffer.extend(pcm)
+        if isinstance(pcm, memoryview):
+            pcm_bytes = pcm.tobytes()
+        elif isinstance(pcm, (bytes, bytearray)):
+            pcm_bytes = bytes(pcm)
+        elif hasattr(pcm, "tobytes"):
+            pcm_bytes = pcm.tobytes()
+        else:
+            pcm_bytes = bytes(pcm)
+        if not pcm_bytes:
+            return
+        self.input_buffer.extend(pcm_bytes)
+        self._frame_count += 1
+        if self._frame_count <= 3 or self._frame_count % 50 == 0:
+            print(f"🎧 LiveKit audio frame {self._frame_count}: {len(pcm_bytes)} bytes", flush=True)
 
     async def _consume_audio_track(self, track):
         try:

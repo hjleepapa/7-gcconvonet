@@ -140,6 +140,18 @@ def get_deepgram_tts_service():
         deepgram_service = get_deepgram_service()
     return deepgram_service
 
+def _synthesize_deepgram_linear16(text: str, voice: str = "aura-asteria-en", sample_rate: int = 24000) -> Optional[bytes]:
+    deepgram_tts = get_deepgram_tts_service()
+    if not deepgram_tts:
+        return None
+    return deepgram_tts.synthesize_speech(
+        text,
+        voice=voice,
+        encoding="linear16",
+        sample_rate=sample_rate,
+        container="none"
+    )
+
 # Active sessions storage (fallback for when Redis is unavailable)
 active_sessions = {}
 
@@ -1620,12 +1632,27 @@ def init_socketio(socketio_instance: SocketIO, app):
                     
                     # Only send welcome greeting on first authentication, not on re-authentication
                     if not was_already_authenticated:
-                        # Send welcome greeting with audio (background task)
-                        socketio.start_background_task(
-                            send_welcome_greeting, 
-                            session_id, 
-                            user.first_name
-                        )
+                        if _livekit_active():
+                            try:
+                                if redis_manager.is_available():
+                                    update_session(session_id, {
+                                        'pending_welcome_greeting': 'True',
+                                        'pending_welcome_name': user.first_name
+                                    })
+                                else:
+                                    active_sessions[session_id]['pending_welcome_greeting'] = True
+                                    active_sessions[session_id]['pending_welcome_name'] = user.first_name
+                                print(f"💾 Stored pending welcome greeting for session {session_id}", flush=True)
+                            except Exception as pending_welcome_error:
+                                print(f"⚠️ Failed to store pending welcome greeting: {pending_welcome_error}", flush=True)
+                                socketio.start_background_task(send_welcome_greeting, session_id, user.first_name)
+                        else:
+                            # Send welcome greeting with audio (background task)
+                            socketio.start_background_task(
+                                send_welcome_greeting,
+                                session_id,
+                                user.first_name
+                            )
                     else:
                         print(f"⏭️ Skipping welcome greeting (re-authentication)")
                 else:
@@ -1688,6 +1715,28 @@ def init_socketio(socketio_instance: SocketIO, app):
         """Handle client ready signal - send pending responses if any"""
         session_id = request.sid
         print(f"✅ Client ready signal received from session {session_id}", flush=True)
+
+        # Send pending welcome greeting (LiveKit) once client is ready
+        try:
+            session_data = get_session(session_id) if redis_manager.is_available() else active_sessions.get(session_id)
+            pending_welcome = None
+            pending_name = None
+            if session_data:
+                pending_welcome = session_data.get('pending_welcome_greeting')
+                pending_name = session_data.get('pending_welcome_name')
+            if pending_welcome in ['True', True] and pending_name:
+                print(f"📣 Sending pending welcome greeting for {pending_name}", flush=True)
+                socketio.start_background_task(send_welcome_greeting, session_id, pending_name)
+                if redis_manager.is_available():
+                    update_session(session_id, {
+                        'pending_welcome_greeting': 'False',
+                        'pending_welcome_name': ''
+                    })
+                else:
+                    active_sessions[session_id]['pending_welcome_greeting'] = False
+                    active_sessions[session_id]['pending_welcome_name'] = ''
+        except Exception as pending_welcome_error:
+            print(f"⚠️ Failed to send pending welcome greeting: {pending_welcome_error}", flush=True)
         
         # Check if there's a pending response for this session
         if hasattr(socketio, '_pending_responses') and session_id in socketio._pending_responses:
@@ -2034,13 +2083,6 @@ def init_socketio(socketio_instance: SocketIO, app):
             print(f"❌ Error updating recording state: {e}")
             sentry_capture_redis_operation("update_recording_state", session_id, False, str(e))
 
-        # Disable LiveKit recording (if active)
-        if _livekit_input_active():
-            try:
-                livekit_manager.set_recording(session_id, False)
-            except Exception as livekit_stop_error:
-                print(f"⚠️ Failed to disable LiveKit recording: {livekit_stop_error}", flush=True)
-
         # If streaming STT is active, stop the stream and return (skip batch transcription)
         if STREAMING_STT_ENABLED and session_id in streaming_sessions:
             try:
@@ -2056,6 +2098,11 @@ def init_socketio(socketio_instance: SocketIO, app):
         audio_buffer = None
         if _livekit_input_active():
             try:
+                # Allow a short grace period for final audio frames to arrive
+                try:
+                    socketio.sleep(0.35)
+                except Exception:
+                    time.sleep(0.35)
                 audio_buffer = livekit_manager.pop_audio_buffer(session_id)
                 if audio_buffer:
                     print(f"🎧 LiveKit audio buffer captured: {len(audio_buffer)} bytes", flush=True)
@@ -2065,6 +2112,11 @@ def init_socketio(socketio_instance: SocketIO, app):
             except Exception as livekit_pop_error:
                 print(f"⚠️ Failed to pop LiveKit audio buffer: {livekit_pop_error}", flush=True)
                 audio_buffer = None
+            finally:
+                try:
+                    livekit_manager.set_recording(session_id, False)
+                except Exception as livekit_stop_error:
+                    print(f"⚠️ Failed to disable LiveKit recording: {livekit_stop_error}", flush=True)
         
         # Check if audio data is provided directly from client
         if audio_buffer is None and data and 'audio' in data:
@@ -2207,19 +2259,34 @@ def init_socketio(socketio_instance: SocketIO, app):
                 
                 # Generate TTS audio using Deepgram
                 deepgram_tts = get_deepgram_tts_service()
-                audio_bytes = deepgram_tts.synthesize_speech(welcome_text, voice="aura-asteria-en")
+                if _livekit_active():
+                    audio_bytes = deepgram_tts.synthesize_speech(
+                        welcome_text,
+                        voice="aura-asteria-en",
+                        encoding="linear16",
+                        sample_rate=24000,
+                        container="none"
+                    )
+                else:
+                    audio_bytes = deepgram_tts.synthesize_speech(welcome_text, voice="aura-asteria-en")
                 
                 if not audio_bytes:
                     raise Exception("Deepgram TTS failed to generate audio")
                 
-                # Convert to base64
-                audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
-                
-                # Send to client
-                socketio.emit('welcome_greeting', {
-                    'text': welcome_text,
-                    'audio': audio_base64
-                }, namespace='/voice', room=session_id)
+                if _livekit_active():
+                    _ensure_livekit_session(session_id, session_id)
+                    _send_livekit_pcm(session_id, audio_bytes, sample_rate=24000, channels=1)
+                    socketio.emit('welcome_greeting', {
+                        'text': welcome_text
+                    }, namespace='/voice', room=session_id)
+                else:
+                    # Convert to base64
+                    audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
+                    # Send to client
+                    socketio.emit('welcome_greeting', {
+                        'text': welcome_text,
+                        'audio': audio_base64
+                    }, namespace='/voice', room=session_id)
                 
                 print(f"✅ Welcome greeting sent to {user_name}")
                 
@@ -2389,20 +2456,31 @@ def init_socketio(socketio_instance: SocketIO, app):
                     transfer_message = f"I'm transferring you to {department}. Extension {target_extension}."
                     try:
                         # Generate TTS audio using Deepgram
-                        deepgram_tts = get_deepgram_tts_service()
-                        audio_bytes = deepgram_tts.synthesize_speech(transfer_message, voice="aura-asteria-en")
+                        if _livekit_active():
+                            audio_bytes = _synthesize_deepgram_linear16(transfer_message)
+                        else:
+                            deepgram_tts = get_deepgram_tts_service()
+                            audio_bytes = deepgram_tts.synthesize_speech(transfer_message, voice="aura-asteria-en")
                         
                         if not audio_bytes:
                             raise Exception("Deepgram TTS failed to generate audio")
-                        
-                        audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
-                        
-                        socketio.emit('agent_response', {
-                            'success': True,
-                            'text': transfer_message,
-                            'audio': audio_base64,
-                            'transfer': True
-                        }, namespace='/voice', room=session_id)
+
+                        if _livekit_active():
+                            _send_livekit_pcm(session_id, audio_bytes, sample_rate=24000, channels=1)
+                            socketio.emit('agent_response', {
+                                'success': True,
+                                'text': transfer_message,
+                                'audio': '',
+                                'transfer': True
+                            }, namespace='/voice', room=session_id)
+                        else:
+                            audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
+                            socketio.emit('agent_response', {
+                                'success': True,
+                                'text': transfer_message,
+                                'audio': audio_base64,
+                                'transfer': True
+                            }, namespace='/voice', room=session_id)
                     except Exception as e:
                         print(f"❌ Error generating TTS for transfer: {e}")
                 
@@ -2424,22 +2502,28 @@ def init_socketio(socketio_instance: SocketIO, app):
                 if not use_streaming_tts:
                     try:
                         ack_text = "One moment while I check that."
-                        deepgram_tts = get_deepgram_tts_service()
-                        if deepgram_tts:
-                            ack_audio = deepgram_tts.synthesize_speech(ack_text, voice="aura-asteria-en")
+                        if _livekit_active():
+                            ack_audio = _synthesize_deepgram_linear16(ack_text)
                             if ack_audio:
-                                ack_base64 = base64.b64encode(ack_audio).decode('utf-8')
-                                emit_socketio = socketio if socketio else (socketio_instance_global if 'socketio_instance_global' in globals() else None)
-                                if emit_socketio:
-                                    emit_socketio.emit('audio_chunk', {
-                                        'success': True,
-                                        'chunk_index': 0,
-                                        'total_chunks': 1,
-                                        'audio': ack_base64,
-                                        'is_final': True,
-                                        'is_ack': True
-                                    }, namespace='/voice', room=session_id)
-                                    print("📤 Emitted acknowledgement audio chunk", flush=True)
+                                _send_livekit_pcm(session_id, ack_audio, sample_rate=24000, channels=1)
+                                print("📤 Emitted LiveKit acknowledgement audio", flush=True)
+                        else:
+                            deepgram_tts = get_deepgram_tts_service()
+                            if deepgram_tts:
+                                ack_audio = deepgram_tts.synthesize_speech(ack_text, voice="aura-asteria-en")
+                                if ack_audio:
+                                    ack_base64 = base64.b64encode(ack_audio).decode('utf-8')
+                                    emit_socketio = socketio if socketio else (socketio_instance_global if 'socketio_instance_global' in globals() else None)
+                                    if emit_socketio:
+                                        emit_socketio.emit('audio_chunk', {
+                                            'success': True,
+                                            'chunk_index': 0,
+                                            'total_chunks': 1,
+                                            'audio': ack_base64,
+                                            'is_final': True,
+                                            'is_ack': True
+                                        }, namespace='/voice', room=session_id)
+                                        print("📤 Emitted acknowledgement audio chunk", flush=True)
                     except Exception as ack_error:
                         print(f"⚠️ Ack audio generation failed: {ack_error}", flush=True)
                 
@@ -2477,6 +2561,11 @@ def init_socketio(socketio_instance: SocketIO, app):
                         print(f"⚠️ ElevenLabs setup failed, falling back to Deepgram: {e}", flush=True)
                         use_elevenlabs = False
                         tts_provider = "deepgram"
+
+                if _livekit_active() and use_elevenlabs:
+                    print("ℹ️ LiveKit active - disabling ElevenLabs to keep PCM audio", flush=True)
+                    use_elevenlabs = False
+                    tts_provider = "deepgram"
                 
                 print(f"🤖 Starting agent processing for: {transcribed_text[:100]}", flush=True)
                 sys.stdout.flush()
@@ -2560,6 +2649,11 @@ def init_socketio(socketio_instance: SocketIO, app):
                         if streaming_tts:
                             streaming_tts.send_text(filler_text + " ")
                             return
+                        if _livekit_active():
+                            filler_audio = _synthesize_deepgram_linear16(filler_text)
+                            if filler_audio:
+                                _send_livekit_pcm(session_id, filler_audio, sample_rate=24000, channels=1)
+                                return
                         deepgram_tts = get_deepgram_tts_service()
                         if deepgram_tts:
                             filler_audio = deepgram_tts.synthesize_speech(filler_text, voice="aura-asteria-en")
@@ -2676,11 +2770,14 @@ def init_socketio(socketio_instance: SocketIO, app):
                             chunk_audio = None
 
                             # Prefer Deepgram for early TTS (typically faster) to reduce time-to-first-audio
-                            deepgram_tts_service = get_deepgram_tts_service()
-                            if deepgram_tts_service:
-                                chunk_audio = deepgram_tts_service.synthesize_speech(first_sentence, voice="aura-asteria-en")
+                            if _livekit_active():
+                                chunk_audio = _synthesize_deepgram_linear16(first_sentence)
+                            else:
+                                deepgram_tts_service = get_deepgram_tts_service()
+                                if deepgram_tts_service:
+                                    chunk_audio = deepgram_tts_service.synthesize_speech(first_sentence, voice="aura-asteria-en")
 
-                            if not chunk_audio and use_elevenlabs:
+                            if not chunk_audio and use_elevenlabs and not _livekit_active():
                                 try:
                                     elevenlabs_service = get_elevenlabs_service()
                                     if elevenlabs_service and elevenlabs_service.is_available():
@@ -2693,30 +2790,34 @@ def init_socketio(socketio_instance: SocketIO, app):
                                     print(f"⚠️ Early ElevenLabs TTS failed: {e}", flush=True)
                             
                             if chunk_audio:
-                                chunk_base64 = base64.b64encode(chunk_audio).decode('utf-8')
-                                with text_accumulator['lock']:
-                                    text_accumulator['early_audio_chunks'].append({
-                                        'chunk_index': text_accumulator['early_chunk_index'],
-                                        'audio': chunk_base64,
-                                        'is_final': False
-                                    })
-                                    text_accumulator['early_chunk_index'] += 1
-                                
-                                # Emit early audio chunk immediately
-                                emit_socketio = socketio if socketio else (socketio_instance_global if 'socketio_instance_global' in globals() else None)
-                                if emit_socketio:
-                                    try:
-                                        emit_socketio.emit('audio_chunk', {
-                                            'success': True,
-                                            'chunk_index': 0,
-                                            'total_chunks': -1,  # Unknown at this point
+                                if _livekit_active():
+                                    _send_livekit_pcm(session_id, chunk_audio, sample_rate=24000, channels=1)
+                                    print(f"📤 Emitted EARLY LiveKit audio chunk ({len(chunk_audio)} bytes)", flush=True)
+                                else:
+                                    chunk_base64 = base64.b64encode(chunk_audio).decode('utf-8')
+                                    with text_accumulator['lock']:
+                                        text_accumulator['early_audio_chunks'].append({
+                                            'chunk_index': text_accumulator['early_chunk_index'],
                                             'audio': chunk_base64,
-                                            'is_final': False,
-                                            'is_early': True  # Mark as early chunk
-                                        }, namespace='/voice', room=session_id)
-                                        print(f"📤 Emitted EARLY audio chunk ({len(chunk_base64)} chars)", flush=True)
-                                    except Exception as emit_error:
-                                        print(f"⚠️ Error emitting early chunk: {emit_error}", flush=True)
+                                            'is_final': False
+                                        })
+                                        text_accumulator['early_chunk_index'] += 1
+                                    
+                                    # Emit early audio chunk immediately
+                                    emit_socketio = socketio if socketio else (socketio_instance_global if 'socketio_instance_global' in globals() else None)
+                                    if emit_socketio:
+                                        try:
+                                            emit_socketio.emit('audio_chunk', {
+                                                'success': True,
+                                                'chunk_index': 0,
+                                                'total_chunks': -1,  # Unknown at this point
+                                                'audio': chunk_base64,
+                                                'is_final': False,
+                                                'is_early': True  # Mark as early chunk
+                                            }, namespace='/voice', room=session_id)
+                                            print(f"📤 Emitted EARLY audio chunk ({len(chunk_base64)} chars)", flush=True)
+                                        except Exception as emit_error:
+                                            print(f"⚠️ Error emitting early chunk: {emit_error}", flush=True)
                             else:
                                 print(f"⚠️ Failed to generate early TTS audio", flush=True)
                         except Exception as e:
@@ -2866,12 +2967,16 @@ def init_socketio(socketio_instance: SocketIO, app):
                         # Short response - use original approach
                         print(f"🔊 Short response ({len(agent_response)} chars), using non-streaming TTS", flush=True)
                         audio_bytes = None
+                        use_livekit_audio = _livekit_active()
                         if response_cancel_event.is_set():
                             print("🛑 Response cancelled before short TTS generation (barge-in)", flush=True)
                             if session_id in active_response_controls:
                                 active_response_controls.pop(session_id, None)
                             return
                     
+                        if use_livekit_audio:
+                            use_elevenlabs = False
+
                         if use_elevenlabs:
                             try:
                                 elevenlabs = get_elevenlabs_service()
@@ -2898,15 +3003,30 @@ def init_socketio(socketio_instance: SocketIO, app):
                     
                         if not audio_bytes:
                             deepgram_tts = get_deepgram_tts_service()
-                            audio_bytes = deepgram_tts.synthesize_speech(agent_response, voice="aura-asteria-en")
+                            if use_livekit_audio:
+                                audio_bytes = deepgram_tts.synthesize_speech(
+                                    agent_response,
+                                    voice="aura-asteria-en",
+                                    encoding="linear16",
+                                    sample_rate=24000,
+                                    container="none"
+                                )
+                            else:
+                                audio_bytes = deepgram_tts.synthesize_speech(agent_response, voice="aura-asteria-en")
                             tts_provider = "deepgram"
                     
                         if not audio_bytes:
                             raise Exception(f"{tts_provider.capitalize()} TTS failed to generate audio")
                     
-                        audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
-                        print(f"🔊 TTS generated: {len(audio_bytes)} bytes, base64: {len(audio_base64)} chars", flush=True)
-                        sentry_capture_voice_event("tts_generation_completed", session_id, session.get('user_id'), details={"audio_size": len(audio_base64), "chunks": 1})
+                        if use_livekit_audio:
+                            _send_livekit_pcm(session_id, audio_bytes, sample_rate=24000, channels=1)
+                            audio_base64 = ""
+                            print(f"🔊 TTS generated for LiveKit: {len(audio_bytes)} bytes", flush=True)
+                            sentry_capture_voice_event("tts_generation_completed", session_id, session.get('user_id'), details={"audio_size": len(audio_bytes), "chunks": 1, "livekit": True})
+                        else:
+                            audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
+                            print(f"🔊 TTS generated: {len(audio_bytes)} bytes, base64: {len(audio_base64)} chars", flush=True)
+                            sentry_capture_voice_event("tts_generation_completed", session_id, session.get('user_id'), details={"audio_size": len(audio_base64), "chunks": 1})
                     else:
                         # Long response - stream chunks
                         print(f"🔊 Long response ({len(agent_response)} chars, {len(text_chunks)} chunks), using streaming TTS", flush=True)
@@ -2920,6 +3040,9 @@ def init_socketio(socketio_instance: SocketIO, app):
                         # Initialize TTS service
                         elevenlabs_service = None
                         deepgram_tts_service = None
+                        use_livekit_audio = _livekit_active()
+                        if use_livekit_audio:
+                            use_elevenlabs = False
                         if use_elevenlabs:
                             try:
                                 elevenlabs_service = get_elevenlabs_service()
@@ -2967,27 +3090,34 @@ def init_socketio(socketio_instance: SocketIO, app):
                                         print(f"⚠️ ElevenLabs chunk {chunk_idx+1}/{len(text_chunks)} failed: {e}", flush=True)
                                         chunk_audio = None
                     
-                                if not chunk_audio and deepgram_tts_service:
-                                    chunk_audio = deepgram_tts_service.synthesize_speech(text_chunk, voice="aura-asteria-en")
+                                if not chunk_audio:
+                                    if use_livekit_audio:
+                                        chunk_audio = _synthesize_deepgram_linear16(text_chunk)
+                                    elif deepgram_tts_service:
+                                        chunk_audio = deepgram_tts_service.synthesize_speech(text_chunk, voice="aura-asteria-en")
                     
                                 if chunk_audio:
+                                    if use_livekit_audio:
+                                        _send_livekit_pcm(session_id, chunk_audio, sample_rate=24000, channels=1)
+                                        chunk_audio = StreamingTTSStream._wrap_linear16_wav(chunk_audio, sample_rate=24000, channels=1, sample_width=2)
                                     chunk_base64 = base64.b64encode(chunk_audio).decode('utf-8')
                                     all_audio_chunks.append(chunk_base64)
                     
                                     # Emit this chunk immediately
-                                    emit_socketio = socketio if socketio else (socketio_instance_global if 'socketio_instance_global' in globals() else None)
-                                    if emit_socketio:
-                                        try:
-                                            emit_socketio.emit('audio_chunk', {
-                                                'success': True,
-                                                'chunk_index': chunk_idx - chunk_offset,  # Adjust index if first chunk was skipped
-                                                'total_chunks': len(text_chunks) - chunk_offset,  # Adjust total if first chunk was skipped
-                                                'audio': chunk_base64,
-                                                'is_final': chunk_idx == len(text_chunks) - 1
-                                            }, namespace='/voice', room=session_id)
-                                            print(f"📤 Emitted audio chunk {chunk_idx+1}/{len(text_chunks)} ({len(chunk_base64)} chars)", flush=True)
-                                        except Exception as emit_error:
-                                            print(f"⚠️ Error emitting chunk {chunk_idx+1}: {emit_error}", flush=True)
+                                    if not use_livekit_audio:
+                                        emit_socketio = socketio if socketio else (socketio_instance_global if 'socketio_instance_global' in globals() else None)
+                                        if emit_socketio:
+                                            try:
+                                                emit_socketio.emit('audio_chunk', {
+                                                    'success': True,
+                                                    'chunk_index': chunk_idx - chunk_offset,  # Adjust index if first chunk was skipped
+                                                    'total_chunks': len(text_chunks) - chunk_offset,  # Adjust total if first chunk was skipped
+                                                    'audio': chunk_base64,
+                                                    'is_final': chunk_idx == len(text_chunks) - 1
+                                                }, namespace='/voice', room=session_id)
+                                                print(f"📤 Emitted audio chunk {chunk_idx+1}/{len(text_chunks)} ({len(chunk_base64)} chars)", flush=True)
+                                            except Exception as emit_error:
+                                                print(f"⚠️ Error emitting chunk {chunk_idx+1}: {emit_error}", flush=True)
                                 else:
                                     chunk_errors.append(chunk_idx)
                                     print(f"⚠️ Failed to generate audio for chunk {chunk_idx+1}", flush=True)
