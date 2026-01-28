@@ -153,6 +153,7 @@ def livekit_debug():
         try:
             from livekit import rtc
             status["import_rtc"] = "Success"
+            status["rtc_dir"] = dir(rtc)  # List everything in rtc module
         except ImportError as e:
             status["import_rtc"] = str(e)
             

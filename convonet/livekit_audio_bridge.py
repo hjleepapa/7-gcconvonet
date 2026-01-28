@@ -17,7 +17,14 @@ try:
         if hasattr(rtc, 'RoomEvent'):
             RoomEvent = rtc.RoomEvent
         else:
-            raise
+            print("⚠️ Defining fallback RoomEvent class")
+            class RoomEvent:
+                PARTICIPANT_CONNECTED = "participant_connected"
+                PARTICIPANT_DISCONNECTED = "participant_disconnected"
+                TRACK_PUBLISHED = "track_published"
+                TRACK_UNPUBLISHED = "track_unpublished"
+                TRACK_SUBSCRIBED = "track_subscribed"
+                TRACK_UNSUBSCRIBED = "track_unsubscribed"
     
     # Try to print version
     try:
