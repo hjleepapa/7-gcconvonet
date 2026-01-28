@@ -107,14 +107,17 @@ class LiveKitRoomSession:
         if not self.recording_enabled:
             return
         pcm = None
+        frame_obj = frame
+        if hasattr(frame, "frame"):
+            frame_obj = getattr(frame, "frame", frame)
         for attr in ("data", "samples", "buffer", "pcm"):
-            if hasattr(frame, attr):
-                pcm = getattr(frame, attr, None)
+            if hasattr(frame_obj, attr):
+                pcm = getattr(frame_obj, attr, None)
                 if pcm is not None:
                     break
-        if pcm is None and hasattr(frame, "to_bytes"):
+        if pcm is None and hasattr(frame_obj, "to_bytes"):
             try:
-                pcm = frame.to_bytes()
+                pcm = frame_obj.to_bytes()
             except Exception:
                 pcm = None
         if pcm is None:
@@ -122,7 +125,12 @@ class LiveKitRoomSession:
                 self._frame_debugged = True
                 try:
                     attrs = [a for a in dir(frame) if not a.startswith("_")]
-                    print(f"⚠️ LiveKit audio frame missing pcm data. attrs={attrs}", flush=True)
+                    nested_attrs = []
+                    if hasattr(frame, "frame"):
+                        nested = getattr(frame, "frame", None)
+                        if nested is not None:
+                            nested_attrs = [a for a in dir(nested) if not a.startswith("_")]
+                    print(f"⚠️ LiveKit audio frame missing pcm data. attrs={attrs} nested={nested_attrs}", flush=True)
                 except Exception:
                     pass
             return
@@ -139,9 +147,9 @@ class LiveKitRoomSession:
         self.input_buffer.extend(pcm_bytes)
         self._frame_count += 1
         if self._frame_count <= 3 or self._frame_count % 50 == 0:
-            sample_rate = getattr(frame, "sample_rate", None)
-            channels = getattr(frame, "num_channels", None)
-            spc = getattr(frame, "samples_per_channel", None)
+            sample_rate = getattr(frame_obj, "sample_rate", None)
+            channels = getattr(frame_obj, "num_channels", None)
+            spc = getattr(frame_obj, "samples_per_channel", None)
             print(f"🎧 LiveKit audio frame {self._frame_count}: {len(pcm_bytes)} bytes sr={sample_rate} ch={channels} spc={spc}", flush=True)
 
     def _ensure_audio_subscriptions(self):
