@@ -206,7 +206,7 @@
         let livekitRoom = null;
         let livekitConnected = false;
         let livekitConnecting = false;
-        let localAudioTrack = null;
+        let livekitMicEnabled = false;
         const livekitAudioElements = new Map();
         let fallbackAudio = null;
         let livekitSdk = null;
@@ -418,8 +418,10 @@
                     if (track.kind === LiveKitClient.Track.Kind.Audio) {
                         const element = track.attach();
                         element.autoplay = true;
+                        element.playsInline = true;
                         element.style.display = 'none';
                         document.body.appendChild(element);
+                        element.play().catch(() => {});
                         livekitAudioElements.set(track.sid, element);
                     }
                 });
@@ -446,21 +448,24 @@
             }
         }
 
-        async function ensureLocalTrack() {
+        async function setMicrophoneEnabled(enabled) {
             if (!livekitRoom) return false;
-            if (!localAudioTrack) {
-                if (!livekitSdk) {
-                    return false;
-                }
-                localAudioTrack = await livekitSdk.createLocalAudioTrack({
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    autoGainControl: true,
-                });
-                await livekitRoom.localParticipant.publishTrack(localAudioTrack);
-                await localAudioTrack.mute();
+            try {
+                await livekitRoom.localParticipant.setMicrophoneEnabled(enabled);
+                livekitMicEnabled = enabled;
+                return true;
+            } catch (error) {
+                console.error('❌ LiveKit microphone error:', error);
+                return false;
             }
-            return true;
+        }
+
+        async function waitForLivekitConnected(timeoutMs = 5000) {
+            const start = Date.now();
+            while (!livekitConnected && Date.now() - start < timeoutMs) {
+                await new Promise((resolve) => setTimeout(resolve, 100));
+            }
+            return livekitConnected;
         }
 
         function initSocket() {
@@ -604,19 +609,23 @@
             if (icon) icon.className = 'fas fa-stop';
             if (label) label.textContent = 'Recording... Click to stop';
 
-            if (!livekitConnected) {
-                socket.emit('get_livekit_info');
-                showStatus('Connecting LiveKit...', 'info');
-            }
-
             try {
-                const ok = await ensureLocalTrack();
+                if (!livekitConnected) {
+                    socket.emit('get_livekit_info');
+                    showStatus('Connecting LiveKit...', 'info');
+                    const ready = await waitForLivekitConnected();
+                    if (!ready) {
+                        showStatus('LiveKit not connected yet.', 'error');
+                        resetMicButton();
+                        return;
+                    }
+                }
+                const ok = await setMicrophoneEnabled(true);
                 if (!ok) {
                     showStatus('Unable to start microphone.', 'error');
                     resetMicButton();
                     return;
                 }
-                await localAudioTrack.unmute();
                 socket.emit('start_recording');
             } catch (error) {
                 console.error('❌ Start recording error:', error);
@@ -636,8 +645,8 @@
             if (label) label.textContent = 'Processing...';
 
             try {
-                if (localAudioTrack) {
-                    await localAudioTrack.mute();
+                if (livekitRoom && livekitMicEnabled) {
+                    await setMicrophoneEnabled(false);
                 }
                 socket.emit('stop_recording');
             } catch (error) {

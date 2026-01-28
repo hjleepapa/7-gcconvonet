@@ -120,9 +120,23 @@ class LiveKitRoomSession:
         @self.room.on("track_subscribed")
         def _on_track_subscribed(track, publication, participant):
             if track.kind == rtc.TrackKind.KIND_AUDIO:
+                print(f"🎧 LiveKit subscribed to audio track from {participant.identity}", flush=True)
                 asyncio.create_task(self._consume_audio_track(track))
 
-        await self.room.connect(self.url, self.token)
+        connect_options = None
+        try:
+            connect_options = rtc.RoomOptions(auto_subscribe=True)
+        except Exception:
+            try:
+                connect_options = rtc.RoomOptions()
+                connect_options.auto_subscribe = True
+            except Exception:
+                connect_options = None
+
+        if connect_options:
+            await self.room.connect(self.url, self.token, connect_options)
+        else:
+            await self.room.connect(self.url, self.token)
         self.audio_source = rtc.AudioSource(self.sample_rate, self.channels)
         local_track = rtc.LocalAudioTrack.create_audio_track("assistant_audio", self.audio_source)
         await self.room.local_participant.publish_track(local_track)
