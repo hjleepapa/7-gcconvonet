@@ -8,7 +8,7 @@ import jwt
 
 try:
     from livekit import rtc
-from livekit.rtc import RoomEvent
+    from livekit.rtc import RoomEvent
     LIVEKIT_AVAILABLE = True
 except Exception as e:
     print(f"⚠️ LiveKit SDK not available: {e}")
