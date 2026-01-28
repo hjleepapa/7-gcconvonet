@@ -184,7 +184,7 @@ composio-core>=0.3.0
 flask-limiter>=3.0.0
 
 # LiveKit SDK
-livekit>=0.17.0
+livekit==0.17.5
 livekit-api>=0.6.0
 
 # Deepgram SDK for WebRTC speech-to-text

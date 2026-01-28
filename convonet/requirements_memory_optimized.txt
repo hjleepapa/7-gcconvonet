@@ -40,7 +40,7 @@ flask-limiter>=3.0.0
 twilio>=8.0.0
 
 # LiveKit SDK
-livekit>=0.17.0
+livekit==0.17.5
 livekit-api>=0.6.0
 
 # Monitoring
