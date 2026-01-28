@@ -40,6 +40,15 @@ services:
         value: ak_68Xsj6WGv3Zl4ooBgkcD
       - key: COMPOSIO_PROJECT_ID
         value: pr_bz7nkY2wflSi
+      # LiveKit Configuration
+      - key: LIVEKIT_ENABLED
+        value: true
+      - key: LIVEKIT_URL
+        sync: false
+      - key: LIVEKIT_API_KEY
+        sync: false
+      - key: LIVEKIT_API_SECRET
+        sync: false
       # Twilio Configuration
       - key: TWILIO_ACCOUNT_SID
         sync: false

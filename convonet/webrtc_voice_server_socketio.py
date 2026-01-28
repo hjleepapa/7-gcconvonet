@@ -1309,7 +1309,10 @@ def init_socketio(socketio_instance: SocketIO, app):
         print(f"🔐 Authentication request for session {session_id}: PIN={pin}")
         
         # Capture authentication attempt in Sentry
-        sentry_capture_voice_event("authentication_attempt", session_id, details={"pin_provided": bool(pin)})
+        if callable(globals().get('sentry_capture_voice_event')):
+            sentry_capture_voice_event("authentication_attempt", session_id, details={"pin_provided": bool(pin)})
+        else:
+            print(f"⚠️ sentry_capture_voice_event is not callable: {type(globals().get('sentry_capture_voice_event'))}")
         
         try:
             # TEST MODE (optional): allow a configurable PIN when explicitly enabled

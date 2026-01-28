@@ -738,7 +738,7 @@ LiveKit SFU → Browser playback
             }
             if (button) {
                 button.classList.remove('recording', 'processing');
-                button.disabled = false;
+                button.disabled = !LIVEKIT_ENABLED;
             }
             if (icon) icon.className = 'fas fa-microphone';
             if (label) label.textContent = 'Click to speak';
