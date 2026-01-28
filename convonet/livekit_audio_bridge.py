@@ -8,7 +8,9 @@ import jwt
 
 try:
     from livekit import rtc
-    from livekit import rtc
+    # Debug: Print rtc module contents immediately
+    print(f"🔍 LiveKit RTC Module Contents: {dir(rtc)}", flush=True)
+    
     try:
         from livekit.rtc import RoomEvent
     except ImportError:
@@ -186,15 +188,23 @@ class LiveKitRoomSession:
             print(f"🎧 LiveKit audio frame {self._frame_count}: {len(pcm_bytes)} bytes sr={sample_rate} ch={channels} spc={spc}", flush=True)
 
     def _ensure_audio_subscriptions(self):
-        """Subscribe to any remote audio track publications (sync or async)."""
+        """Ensure we are subscribed to all remote audio tracks"""
         if not self.room:
             return
-        participants = getattr(self.room, "remote_participants", {})
-        try:
-            print(f"🔎 LiveKit ensure subscribe: participants={len(participants)}", flush=True)
-        except Exception:
-            pass
-        for _, participant in participants.items():
+
+        print(f"🔎 LiveKit ensure subscribe: participants={len(self.room.remote_participants)}", flush=True)
+        
+        for p_id, participant in self.room.remote_participants.items():
+            # Helper to log attributes for debugging
+            try:
+                if not getattr(participant, "_debug_logged", False):
+                    print(f"🕵️ DEBUG {participant.identity} keys: {list(participant.__dict__.keys()) if hasattr(participant, '__dict__') else 'no __dict__'}", flush=True)
+                    # Dump everything that looks like a track if strict lookups failed
+                    participant._debug_logged = True
+            except:
+                pass
+
+            # Try to find tracks in various potential locations
             pubs = None
             if hasattr(participant, "track_publications") and participant.track_publications:
                 pubs = participant.track_publications
@@ -209,62 +219,49 @@ class LiveKitRoomSession:
             elif hasattr(participant, "_track_publications") and participant._track_publications:
                 pubs = getattr(participant, "_track_publications", None)
             
+            # If still nothing, do a deep search and log it
             if not pubs:
                 try:
-                    print(f"🕵️ DEBUG {participant.identity} keys: {list(participant.__dict__.keys()) if hasattr(participant, '__dict__') else 'no __dict__'}", flush=True)
+                    # One-time deep introspection log
+                    print(f"🕵️ DEBUG Introspecting participant {participant.identity} for missing tracks...", flush=True)
                     for a in dir(participant):
                         if "track" in a.lower() or "pub" in a.lower():
-                            v = getattr(participant, a, "N/A")
-                            print(f"🕵️ DEBUG {participant.identity} attr {a} = {v}", flush=True)
+                            try:
+                                v = getattr(participant, a, "N/A")
+                                print(f"   - {a}: {v}", flush=True)
+                            except:
+                                pass
                 except Exception as e:
-                    print(f"🕵️ DEBUG {participant.identity} failed: {e}", flush=True)
-                try:
-                    debug_attrs = [name for name in dir(participant) if "track" in name or "pub" in name]
-                    # Also check if it's a dict and empty
-                    is_dict = isinstance(getattr(participant, "track_publications", None), dict)
-                    dict_len = len(getattr(participant, "track_publications", {})) if is_dict else "N/A"
-                    print(f"🔎 LiveKit ensure subscribe: no publications for {participant.identity} attrs={debug_attrs} dict_len={dict_len}", flush=True)
-                except Exception:
-                    pass
+                    print(f"�️ DEBUG introspection failed: {e}", flush=True)
                 continue
             
+            # Normalize to iterator
+            pub_items = []
             if isinstance(pubs, dict):
-                pub_items = pubs.items()
-            else:
-                try:
-                    pub_items = pubs.items()
-                except Exception:
-                    pub_items = enumerate(list(pubs))
-            
-            try:
-                pub_list = []
-                for _, publication in pub_items:
-                    kind = getattr(publication, "kind", None)
-                    pub_list.append(str(kind))
-                print(f"🔎 LiveKit publications for {participant.identity}: {pub_list}", flush=True)
-                # Reset iterator
-                if isinstance(pubs, dict):
-                    pub_items = pubs.items()
-                else:
-                    try:
-                        pub_items = pubs.items()
-                    except Exception:
-                        pub_items = enumerate(list(pubs))
-            except Exception:
-                pass
+                pub_items = pubs.values()
+            elif isinstance(pubs, list) or hasattr(pubs, '__iter__'):
+                pub_items = list(pubs)
 
-            for _, publication in pub_items:
+            if not pub_items:
+                 print(f"🔎 LiveKit found empty publications list for {participant.identity}", flush=True)
+
+            for publication in pub_items:
                 kind = getattr(publication, "kind", None)
                 kind_name = str(kind).lower() if kind is not None else ""
+                
                 if kind == rtc.TrackKind.KIND_AUDIO or "audio" in kind_name:
-                    try:
-                        print(f"🎙️ LiveKit manually subscribing to {kind_name} track for {participant.identity}", flush=True)
-                        result = publication.set_subscribed(True)
-                        if asyncio.iscoroutine(result):
-                            asyncio.run_coroutine_threadsafe(result, self.loop)
-                        print(f"✅ LiveKit ensured audio subscribed for {participant.identity}", flush=True)
-                    except Exception as e:
-                        print(f"⚠️ LiveKit ensure subscribe failed: {e}", flush=True)
+                    if not getattr(publication, "subscribed", False):
+                        try:
+                            print(f"🎙️ LiveKit manually subscribing to {kind_name} track for {participant.identity}", flush=True)
+                            if hasattr(publication, "set_subscribed"):
+                                result = publication.set_subscribed(True)
+                                if asyncio.iscoroutine(result):
+                                    asyncio.run_coroutine_threadsafe(result, self.loop)
+                                print(f"✅ LiveKit ensured audio subscribed for {participant.identity}", flush=True)
+                            else:
+                                print(f"⚠️ Publication has no set_subscribed: {publication}", flush=True)
+                        except Exception as e:
+                            print(f"⚠️ LiveKit ensure subscribe failed: {e}", flush=True)
 
     def _schedule_subscription_retry(self, delay_sec: float, reason: str):
         if not self.loop:
@@ -291,16 +288,10 @@ class LiveKitRoomSession:
     async def _connect(self):
         self.room = rtc.Room()
 
-        # Catch-all event logger to see what events are actually firing
+        # Catch-all event logger
         try:
-            # Removed invalid catch-all
-            def _on_any_event(*args, **kwargs):
-                try:
-                    event_name = args[0] if args else "unknown"
-                    if event_name not in ["participant_metadata_changed", "room_metadata_changed", "active_speakers_changed"]:
-                        print(f"🔔 LiveKit Room Event: {event_name}", flush=True)
-                except Exception:
-                    pass
+            # We cannot easily hook "all" events in pyee without hacking, but we can hook the ones we know
+            pass
         except Exception:
             pass
 
@@ -309,20 +300,10 @@ class LiveKitRoomSession:
             try:
                 print(f"👤 LiveKit participant connected: {participant.identity}", flush=True)
                 try:
-                    room_name = getattr(self.room, "name", None)
-                    participants = []
-                    for _, remote in getattr(self.room, "remote_participants", {}).items():
-                        identity = getattr(remote, "identity", None)
-                        if identity:
-                            participants.append(identity)
-                    print(f"🧭 LiveKit room '{room_name}' participants: {participants}", flush=True)
-                    try:
-                        self._ensure_audio_subscriptions()
-                        self._schedule_subscription_retry(0.5, reason="participant_connected_0.5s")
-                        self._schedule_subscription_retry(1.5, reason="participant_connected_1.5s")
-                        self._schedule_subscription_retry(3.0, reason="participant_connected_3.0s")
-                    except Exception:
-                        pass
+                    self._ensure_audio_subscriptions()
+                    self._schedule_subscription_retry(0.5, reason="participant_connected_0.5s")
+                    self._schedule_subscription_retry(1.5, reason="participant_connected_1.5s")
+                    self._schedule_subscription_retry(3.0, reason="participant_connected_3.0s")
                 except Exception:
                     pass
             except Exception:
@@ -333,7 +314,7 @@ class LiveKitRoomSession:
             try:
                 kind = getattr(publication, "kind", None)
                 kind_name = str(kind).lower() if kind is not None else ""
-                print(f"🎙️ LiveKit Room Event: track_published by {participant.identity}, kind={kind_name} source={getattr(publication, 'source', 'unknown')}", flush=True)
+                print(f"🎙️ LiveKit Room Event: track_published by {participant.identity}, kind={kind_name}", flush=True)
                 
                 # Always force subscribe to audio tracks, regardless of auto_subscribe
                 if kind == rtc.TrackKind.KIND_AUDIO or "audio" in kind_name:
@@ -423,7 +404,15 @@ class LiveKitRoomSession:
                         t_pubs = getattr(p, "track_publications", {})
                         if not t_pubs:
                             t_pubs = getattr(p, "_track_publications", {})
-                        print(f"  └─ Participant '{pid}' tracks: {list(t_pubs.keys())}", flush=True)
+                        if not t_pubs and hasattr(p, "tracks"):
+                            t_pubs = getattr(p, "tracks", {})
+                        
+                        try:
+                            # Safely get keys
+                            keys = list(t_pubs.keys()) if hasattr(t_pubs, "keys") else str(len(t_pubs)) if hasattr(t_pubs, "__len__") else "unknown"
+                            print(f"  └─ Participant '{pid}' tracks: {keys}", flush=True)
+                        except:
+                            pass
                 except Exception as me:
                     print(f"⚠️ Room monitor error: {me}", flush=True)
                 await asyncio.sleep(5.0)
