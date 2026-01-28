@@ -259,6 +259,15 @@ LiveKit SFU → Browser playback
         handsFreeEnabled = LIVEKIT_ENABLED;
         const LIVEKIT_DEBUG = window.location.search.includes('livekitDebug=1');
 
+        function emitLivekitClientState(state) {
+            if (!socket || !socket.connected) return;
+            try {
+                socket.emit('livekit_client_state', state);
+            } catch (error) {
+                console.warn('⚠️ Failed to emit LiveKit client state:', error);
+            }
+        }
+
         function setLivekitStatus(state, message) {
             const status = document.getElementById('livekitStatus');
             if (!status) return;
@@ -493,6 +502,11 @@ LiveKit SFU → Browser playback
                 livekitConnected = true;
                 setLivekitStatus('online', 'LiveKit: connected');
                 showStatus('LiveKit connected.', 'success');
+                emitLivekitClientState({
+                    event: 'connected',
+                    room: info.room,
+                    identity: info.identity,
+                });
 
                 if (handsFreeEnabled) {
                     const enabled = await ensurePublishedTrack();
@@ -529,9 +543,15 @@ LiveKit SFU → Browser playback
                 await livekitRoom.localParticipant.setMicrophoneEnabled(true);
                 livekitMicEnabled = true;
                 updateLivekitDebug({ mic: 'published' });
+                emitLivekitClientState({
+                    event: 'track_published',
+                    enabled: livekitMicEnabled,
+                    trackId: localAudioTrack && localAudioTrack.mediaStreamTrack ? localAudioTrack.mediaStreamTrack.id : null,
+                });
                 return true;
             } catch (error) {
                 console.error('❌ LiveKit mic publish error:', error);
+                emitLivekitClientState({ event: 'publish_error', message: String(error) });
                 return false;
             }
         }
@@ -729,6 +749,7 @@ LiveKit SFU → Browser playback
                     }
                 }
                 socket.emit('start_recording');
+                emitLivekitClientState({ event: 'recording_start', micEnabled: livekitMicEnabled });
             } catch (error) {
                 console.error('❌ Start recording error:', error);
                 showStatus('Microphone permission denied.', 'error');
@@ -755,6 +776,7 @@ LiveKit SFU → Browser playback
                     await setMicrophoneEnabled(false);
                 }
                 socket.emit('stop_recording');
+                emitLivekitClientState({ event: 'recording_stop', micEnabled: livekitMicEnabled });
             } catch (error) {
                 console.error('❌ Stop recording error:', error);
                 showStatus('Failed to stop recording.', 'error');

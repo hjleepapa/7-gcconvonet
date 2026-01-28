@@ -1812,6 +1812,14 @@ def init_socketio(socketio_instance: SocketIO, app):
             }, namespace='/voice', room=session_id)
             
             print(f"✅ Pending response notification sent - client will fetch via HTTP polling", flush=True)
+
+    @socketio.on('livekit_client_state', namespace='/voice')
+    def handle_livekit_client_state(data):
+        session_id = request.sid
+        try:
+            print(f"📡 LiveKit client state ({session_id}): {data}", flush=True)
+        except Exception as e:
+            print(f"⚠️ LiveKit client state log failed: {e}", flush=True)
     
     
     @socketio.on('start_recording', namespace='/voice')
