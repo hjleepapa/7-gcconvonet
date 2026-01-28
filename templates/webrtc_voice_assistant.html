@@ -327,6 +327,11 @@
                         updateLivekitDebug({ sdk: src, status: `http-${response.status}` });
                         return false;
                     }
+                    const proxyHeader = response.headers.get('X-LiveKit-Proxy');
+                    if (proxyHeader === 'fallback') {
+                        updateLivekitDebug({ sdk: src, status: 'fallback' });
+                        return false;
+                    }
                     const script = document.createElement('script');
                     script.src = `${src}${src.includes('?') ? '&' : '?'}v=${Date.now()}`;
                     script.dataset.livekitSrc = src;

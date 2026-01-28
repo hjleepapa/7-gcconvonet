@@ -942,7 +942,9 @@ def livekit_client_js():
         "  loadNext();\n"
         "})();\n"
     )
-    return Response(fallback_js, mimetype="application/javascript")
+    response = Response(fallback_js, status=503, mimetype="application/javascript")
+    response.headers["X-LiveKit-Proxy"] = "fallback"
+    return response
 
 
 def chunk_text_by_sentences(text: str, min_chunk_size: int = 100, max_chunk_size: int = 500) -> list[str]:
