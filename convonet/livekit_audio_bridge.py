@@ -136,14 +136,22 @@ class LiveKitRoomSession:
 
         async def _send():
             try:
+                # Wait for at least one remote participant (the user) to be ready
+                # This ensures we don't start sending audio to a "phantom" room
+                wait_count = 0
+                while not getattr(self.room, "remote_participants", {}) and wait_count < 10:
+                     print(f"⏳ LiveKit waiting for participant before sending audio (retry {wait_count+1}/10)...", flush=True)
+                     await asyncio.sleep(0.5)
+                     wait_count += 1
+
                 frame_idx = 0
                 for frame in _queue_frames():
                     await self.audio_source.capture_frame(frame)
                     frame_idx += 1
-                    # Re-introduced pacing: SDK 0.17.5 FFI can be sensitive to flooding.
-                    # We yield control to the loop every few frames.
-                    if frame_idx % 8 == 0:
-                         await asyncio.sleep(0.001) # Extremely brief yield
+                    # Real-time pacing: avoid loop starvation.
+                    # 2 frames = 40ms of audio. Sleeping 10ms makes it 4x real-time.
+                    if frame_idx % 2 == 0:
+                         await asyncio.sleep(0.01)
                 print(f"✅ LiveKit sent {frame_idx} audio frames for greeting playback", flush=True)
             except Exception as e:
                 print(f"⚠️ LiveKit capture_frame error: {e}", flush=True)
@@ -166,15 +174,25 @@ class LiveKitRoomSession:
             if self._frame_count < 3:
                 print(f"📡 LiveKit UNWRAPPED frame. type={type(frame_obj)}", flush=True)
         elif "AudioFrameEvent" in str(type(frame)):
+            if self._frame_count < 1:
+                 print(f"📡 DEBUG DIR of frame: {dir(frame)}", flush=True)
+                 try: print(f"📡 DEBUG VARS of frame: {vars(frame)}", flush=True)
+                 except: pass
+
             # If it's an event but has no .frame attribute, try to find ANY frame-like attr
-            for fattr in ("frame", "audio_frame", "audio"):
+            for fattr in ("frame", "audio_frame", "audio", "_frame", "raw_frame"):
                  fval = getattr(frame, fattr, None)
                  if fval:
                       frame_obj = fval
+                      if self._frame_count < 3:
+                           print(f"📡 LiveKit found inner frame in attribute '{fattr}'", flush=True)
                       break
-
+        
+        # If we STILL don't have a frame_obj that looks right, try to find data directly on frame
+        # In some versions, the event IS the frame or has frame attributes flattened
+        
         # Exhaustive attribute check for PCM data
-        for attr in ("data", "samples", "buffer", "pcm"):
+        for attr in ("data", "samples", "buffer", "pcm", "_data", "_samples"):
             if hasattr(frame_obj, attr):
                 val = getattr(frame_obj, attr, None)
                 if val is not None:
