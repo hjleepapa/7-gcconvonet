@@ -383,18 +383,29 @@ class LiveKitRoomSession:
         except Exception as e:
             print(f"❌ LiveKit connection failed in _connect: {e}", flush=True)
             raise e
+        
+        # Log connection success and participants
         try:
             room_name = getattr(self.room, "name", None)
-            local_identity = self.room.local_participant.identity
+            local_participant = getattr(self.room, "local_participant", None)
+            if local_participant:
+                local_identity = getattr(local_participant, "identity", "unknown")
+            else:
+                local_identity = "unknown (no local_participant)"
+                print(f"⚠️ LiveKit room has no local_participant attribute!", flush=True)
+            
             participants = []
-            for _, remote in getattr(self.room, "remote_participants", {}).items():
+            remote_participants = getattr(self.room, "remote_participants", {})
+            for _, remote in remote_participants.items():
                 identity = getattr(remote, "identity", None)
                 if identity:
                     participants.append(identity)
             print(f"✅ LiveKit room '{room_name}' connected as {local_identity}", flush=True)
             print(f"🧭 LiveKit room '{room_name}' participants: {participants}", flush=True)
-        except Exception:
-            pass
+        except Exception as e:
+            import traceback
+            print(f"⚠️ LiveKit post-connection logging failed: {e}", flush=True)
+            print(f"⚠️ Traceback: {traceback.format_exc()}", flush=True)
         
         # CRITICAL: Subscribe to any participants already in the room
         # This handles the race condition where participants connect before PARTICIPANT_CONNECTED fires
