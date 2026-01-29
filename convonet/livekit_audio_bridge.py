@@ -136,7 +136,7 @@ class LiveKitRoomSession:
             return
         self.thread = real_threading.Thread(target=self._run_loop, name=f"LK-{self.token[-5:]}", daemon=True)
         self.thread.start()
-        self.ready.wait(timeout=10)
+        # The caller can poll ready.is_set() or just trust the background task.
 
     def close(self):
         self._closed = True
@@ -456,12 +456,16 @@ class LiveKitRoomSession:
 
     async def _consume_audio_track(self, track):
         track_sid = getattr(track, "sid", "unknown")
-        print(f"🎧 LiveKit audio stream start (sid={track_sid})", flush=True)
         
-        audio_stream = rtc.AudioStream(track)
-        # Store in bridge to keep alive
         with self._recording_lock:
-             self._audio_streams[track_sid] = audio_stream
+            if track_sid in self._audio_streams:
+                print(f"🎧 LiveKit skipping duplicate consumer for {track_sid}", flush=True)
+                return
+            
+            print(f"🎧 LiveKit audio stream start (sid={track_sid})", flush=True)
+            audio_stream = rtc.AudioStream(track)
+            self._audio_streams[track_sid] = audio_stream
+            self._consumed_tracks.add(track_sid)
         
         try:
             print(f"🎧 LiveKit AudioStream iteration starting (sid={track_sid})", flush=True)
@@ -547,9 +551,14 @@ class LiveKitRoomSession:
             try:
                 kind = getattr(track, "kind", None)
                 if kind == rtc.TrackKind.KIND_AUDIO:
-                    track_sid = getattr(track, "sid", None)
-                    print(f"🎧 LiveKit SUCCESSFULLY SUBSCRIBED to audio track from {participant.identity} (sid={track_sid})", flush=True)
-                    asyncio.run_coroutine_threadsafe(self._consume_audio_track(track), self.loop)
+                    track_sid = getattr(track, "sid", "unknown")
+                    with self._recording_lock:
+                        if track_sid not in self._consumed_tracks:
+                            print(f"🎧 LiveKit SUCCESSFULLY SUBSCRIBED to audio track from {participant.identity} (sid={track_sid})", flush=True)
+                            self._consumed_tracks.add(track_sid)
+                            asyncio.run_coroutine_threadsafe(self._consume_audio_track(track), self.loop)
+                        else:
+                            print(f"🎧 LiveKit track {track_sid} already being consumed, skipping subscribed event", flush=True)
             except Exception as e:
                 print(f"⚠️ LiveKit on_track_subscribed error: {e}", flush=True)
 

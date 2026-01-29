@@ -418,7 +418,7 @@ class StreamingSTTSession:
 
     def start(self):
         self.thread.start()
-        self.active.wait(timeout=5.0)
+        # Non-blocking wait if needed, but usually not required for async connection start
 
     def send_audio(self, audio_chunk: bytes):
         if not self.audio_queue:
