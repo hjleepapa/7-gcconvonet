@@ -134,58 +134,85 @@ class LiveKitRoomSession:
         asyncio.run_coroutine_threadsafe(_send(), self.loop)
 
     def _handle_audio_frame(self, frame):
+        # ALWAYS log the very first frame even if recording is off to check connectivity
+        if self._frame_count == 0:
+            print(f"📡 LiveKit RECEIVED FIRST FRAME: type={type(frame)} recording_enabled={self.recording_enabled}", flush=True)
+
         if not self.recording_enabled:
             return
         
-        # Log that we received a frame object of some kind
-        if self._frame_count == 0:
-            print(f"📡 LiveKit first audio frame received: {type(frame)}", flush=True)
-
         pcm = None
         frame_obj = frame
+        
+        # In some SDK versions, the frame is wrapped
         if hasattr(frame, "frame"):
             frame_obj = getattr(frame, "frame", frame)
+            if self._frame_count < 2:
+                print(f"📡 LiveKit unwrapped frame. New type={type(frame_obj)}", flush=True)
+
+        # Exhaustive attribute check for PCM data
         for attr in ("data", "samples", "buffer", "pcm"):
             if hasattr(frame_obj, attr):
-                pcm = getattr(frame_obj, attr, None)
-                if pcm is not None:
+                val = getattr(frame_obj, attr, None)
+                if val is not None:
+                    pcm = val
+                    if self._frame_count < 2:
+                        print(f"📡 LiveKit found data in attribute '{attr}': type={type(pcm)}", flush=True)
                     break
+        
+        # Try to_bytes fallback
         if pcm is None and hasattr(frame_obj, "to_bytes"):
             try:
                 pcm = frame_obj.to_bytes()
-            except Exception:
-                pcm = None
+                if self._frame_count < 2:
+                    print(f"📡 LiveKit extracted PCM via to_bytes()", flush=True)
+            except Exception as e:
+                if self._frame_count < 2:
+                    print(f"⚠️ LiveKit to_bytes fallback failed: {e}", flush=True)
+        
         if pcm is None:
             if not self._frame_debugged:
                 self._frame_debugged = True
                 try:
-                    attrs = [a for a in dir(frame) if not a.startswith("_")]
-                    nested_attrs = []
-                    if hasattr(frame, "frame"):
-                        nested = getattr(frame, "frame", None)
-                        if nested is not None:
-                            nested_attrs = [a for a in dir(nested) if not a.startswith("_")]
-                    print(f"⚠️ LiveKit audio frame missing pcm data. attrs={attrs} nested={nested_attrs}", flush=True)
+                    attrs = [a for a in dir(frame_obj) if not a.startswith("_")]
+                    print(f"⚠️ LiveKit audio frame missing pcm data. frame_type={type(frame_obj)} available_attrs={attrs}", flush=True)
                 except Exception:
                     pass
             return
-        if isinstance(pcm, memoryview):
-            pcm_bytes = pcm.tobytes()
-        elif isinstance(pcm, (bytes, bytearray)):
-            pcm_bytes = bytes(pcm)
-        elif hasattr(pcm, "tobytes"):
-            pcm_bytes = pcm.tobytes()
-        else:
-            pcm_bytes = bytes(pcm)
-        if not pcm_bytes:
+
+        # Convert various memory/byte types to bytes
+        try:
+            if isinstance(pcm, memoryview):
+                pcm_bytes = pcm.tobytes()
+            elif isinstance(pcm, (bytes, bytearray)):
+                pcm_bytes = bytes(pcm)
+            elif hasattr(pcm, "tobytes"):
+                pcm_bytes = pcm.tobytes()
+            elif hasattr(pcm, "data") and isinstance(getattr(pcm, "data"), (bytes, bytearray, memoryview)):
+                # Handle cases where pcm is a buffer object itself
+                inner_data = getattr(pcm, "data")
+                pcm_bytes = bytes(inner_data) if not isinstance(inner_data, memoryview) else inner_data.tobytes()
+            else:
+                pcm_bytes = bytes(pcm)
+        except Exception as e:
+            if self._frame_count < 2:
+                print(f"⚠️ LiveKit pcm_bytes conversion failed: {e}", flush=True)
             return
+
+        if not pcm_bytes:
+            if self._frame_count < 2:
+                print(f"⚠️ LiveKit extracted pcm_bytes is empty!", flush=True)
+            return
+
+        # Success: Buffering
         self.input_buffer.extend(pcm_bytes)
         self._frame_count += 1
+        
+        # Periodic logging of success
         if self._frame_count <= 3 or self._frame_count % 50 == 0:
-            sample_rate = getattr(frame_obj, "sample_rate", None)
-            channels = getattr(frame_obj, "num_channels", None)
-            spc = getattr(frame_obj, "samples_per_channel", None)
-            print(f"🎧 LiveKit audio frame {self._frame_count}: {len(pcm_bytes)} bytes sr={sample_rate} ch={channels} spc={spc}", flush=True)
+            sample_rate = getattr(frame_obj, "sample_rate", "N/A")
+            channels = getattr(frame_obj, "num_channels", "N/A")
+            print(f"🎧 LiveKit audio frame {self._frame_count}: {len(pcm_bytes)} bytes buffered. sr={sample_rate} ch={channels}", flush=True)
 
     def _ensure_audio_subscriptions(self):
         """Ensure we are subscribed to all remote audio tracks"""
