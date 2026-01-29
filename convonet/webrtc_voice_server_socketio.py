@@ -589,11 +589,11 @@ def build_customer_profile_from_session(session_data: dict | None) -> dict | Non
     user_id = session_data.get('user_id')
     if user_id:
         try:
-            from convonet.mcps.local_servers.db_todo import SessionLocal, _init_database
+            from convonet.mcps.local_servers import db_todo
             from convonet.models.user_models import User as UserModel
             
-            _init_database()
-            with SessionLocal() as db_session:
+            db_todo._init_database()
+            with db_todo.SessionLocal() as db_session:
                 user = db_session.query(UserModel).filter(UserModel.id == UUID(user_id)).first()
                 if user:
                     profile.update({
@@ -1485,12 +1485,12 @@ def init_socketio(socketio_instance: SocketIO, app):
                 return
             
             # Import here to avoid circular imports
-            from convonet.mcps.local_servers.db_todo import _init_database, SessionLocal
+            from convonet.mcps.local_servers import db_todo
             from convonet.models.user_models import User as UserModel
             
-            _init_database()
+            db_todo._init_database()
             
-            with SessionLocal() as db_session:
+            with db_todo.SessionLocal() as db_session:
                 user = db_session.query(UserModel).filter(
                     UserModel.voice_pin == pin,
                     UserModel.is_active == True

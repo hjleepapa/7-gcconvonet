@@ -110,8 +110,15 @@ class LiveKitRoomSession:
         return data
 
     def send_pcm(self, pcm_bytes: bytes, sample_rate: Optional[int] = None, channels: Optional[int] = None):
-        if not LIVEKIT_AVAILABLE or not self.audio_source or not pcm_bytes:
+        if not LIVEKIT_AVAILABLE:
             return
+        if not self.audio_source:
+             print(f"⚠️ LiveKit CANNOT SEND AUDIO: audio_source is None for room {self.url}", flush=True)
+             return
+        if not pcm_bytes:
+             print(f"⚠️ LiveKit CANNOT SEND AUDIO: pcm_bytes is empty", flush=True)
+             return
+        
         sr = sample_rate or self.sample_rate
         ch = channels or self.channels
         samples_per_channel = int(sr * 0.02)  # 20ms frames
@@ -128,28 +135,34 @@ class LiveKitRoomSession:
                 yield frame
 
         async def _send():
-            for frame in _queue_frames():
-                await self.audio_source.capture_frame(frame)
+            try:
+                frame_idx = 0
+                for frame in _queue_frames():
+                    await self.audio_source.capture_frame(frame)
+                    frame_idx += 1
+                    # Pacing: the SDK expects roughly 20ms frames. 
+                    # If we don't sleep at all, we might flood the buffer.
+                    # A small sleep every few frames helps the SDK's internal queue.
+                    if frame_idx % 10 == 0:
+                        await asyncio.sleep(0.02) # 20ms pause every 200ms of audio
+                print(f"✅ LiveKit sent {frame_idx} audio frames for greeting playback", flush=True)
+            except Exception as e:
+                print(f"⚠️ LiveKit capture_frame error: {e}", flush=True)
 
         asyncio.run_coroutine_threadsafe(_send(), self.loop)
 
     def _handle_audio_frame(self, frame):
-        # ALWAYS log the very first few frames even if recording is off to check connectivity
+        # ALWAYS log the very first few frames to check connectivity and structure
         if self._frame_count < 3:
             print(f"📡 LiveKit RECEIVED FRAME #{self._frame_count + 1}: type={type(frame)} recording_enabled={self.recording_enabled}", flush=True)
 
-        if not self.recording_enabled:
-            # We still increment frame count if we see them, to know they are arriving
-            self._frame_count += 1
-            return
-        
         pcm = None
         frame_obj = frame
         
-        # In some SDK versions, the frame is wrapped
+        # In this SDK version, the frame is wrapped in AudioFrameEvent
         if hasattr(frame, "frame"):
             frame_obj = getattr(frame, "frame", frame)
-            if self._frame_count < 2:
+            if self._frame_count < 3:
                 print(f"📡 LiveKit unwrapped frame. New type={type(frame_obj)}", flush=True)
 
         # Exhaustive attribute check for PCM data
@@ -158,9 +171,14 @@ class LiveKitRoomSession:
                 val = getattr(frame_obj, attr, None)
                 if val is not None:
                     pcm = val
-                    if self._frame_count < 2:
+                    if self._frame_count < 3:
                         print(f"📡 LiveKit found data in attribute '{attr}': type={type(pcm)}", flush=True)
                     break
+
+        if not self.recording_enabled:
+            # We still increment frame count if we see them, to know they are arriving
+            self._frame_count += 1
+            return
         
         # Try to_bytes fallback
         if pcm is None and hasattr(frame_obj, "to_bytes"):
@@ -343,11 +361,15 @@ class LiveKitRoomSession:
                 if frame_count <= 5 or frame_count % 50 == 0:
                     print(f"🎧 LiveKit received frame #{frame_count}", flush=True)
                 self._handle_audio_frame(frame)
-            print(f"🎧 LiveKit audio stream ended after {frame_count} frames", flush=True)
+            print(f"🎧 LiveKit audio stream {track_sid} ENDED after {frame_count} frames (iteration finished)", flush=True)
+        except asyncio.CancelledError:
+             print(f"🎧 LiveKit audio stream {track_sid} CANCELLED", flush=True)
         except Exception as e:
             import traceback
-            print(f"⚠️ LiveKit audio stream error: {e}", flush=True)
+            print(f"⚠️ LiveKit audio stream {track_sid} error: {e}", flush=True)
             print(f"⚠️ Traceback: {traceback.format_exc()}", flush=True)
+        finally:
+            print(f"🎧 LiveKit audio stream {track_sid} TASK COMPLETE", flush=True)
 
     async def _connect(self):
         self.room = rtc.Room()
@@ -506,7 +528,8 @@ class LiveKitRoomSession:
                             pass
                 except Exception as me:
                     print(f"⚠️ Room monitor error: {me}", flush=True)
-                await asyncio.sleep(5.0)
+                await asyncio.sleep(2.0)
+                print("💓 Heartbeat: LiveKit loop is alive", flush=True)
         
         asyncio.create_task(_monitor_room())
 
