@@ -271,6 +271,33 @@ class LiveKitRoomSession:
                 await asyncio.sleep(delay_sec)
                 print(f"🔁 LiveKit subscription retry ({reason})", flush=True)
                 self._ensure_audio_subscriptions()
+                
+                # CRITICAL: In SDK 0.17.5, track publications may appear after participant connection
+                # Poll for tracks that weren't detected initially
+                for pid, participant in getattr(self.room, "remote_participants", {}).items():
+                    pubs = getattr(participant, "_track_publications", {})
+                    if not isinstance(pubs, dict):
+                        pubs = getattr(participant, "track_publications", {})
+                    
+                    print(f"🔍 Polling {participant.identity}: found {len(pubs)} publications", flush=True)
+                    
+                    for pub_sid, publication in (pubs.items() if isinstance(pubs, dict) else enumerate(pubs)):
+                        kind = getattr(publication, "kind", None)
+                        kind_name = str(kind).lower() if kind is not None else ""
+                        subscribed = getattr(publication, "subscribed", False)
+                        
+                        print(f"   📝 Publication {pub_sid}: kind={kind_name}, subscribed={subscribed}", flush=True)
+                        
+                        if (kind == rtc.TrackKind.KIND_AUDIO or "audio" in kind_name) and not subscribed:
+                            try:
+                                print(f"🎙️ Polling found unsubscribed audio track, subscribing...", flush=True)
+                                if hasattr(publication, "set_subscribed"):
+                                    result = publication.set_subscribed(True)
+                                    if asyncio.iscoroutine(result):
+                                        await result
+                                    print(f"✅ Subscribed via polling to {participant.identity}", flush=True)
+                            except Exception as e:
+                                print(f"⚠️ Polling subscription failed: {e}", flush=True)
             except Exception as e:
                 print(f"⚠️ LiveKit subscription retry failed: {e}", flush=True)
         asyncio.run_coroutine_threadsafe(_retry(), self.loop)
