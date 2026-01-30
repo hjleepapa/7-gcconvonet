@@ -240,6 +240,7 @@ LiveKit SFU → Browser playback
         let livekitMicEnabled = false;
         let localAudioTrack = null;
         let handsFreeEnabled = true;
+        let assistantSpeaking = false;
         let vadContext = null;
         let vadAnalyser = null;
         let vadTimer = null;
@@ -353,6 +354,7 @@ LiveKit SFU → Browser playback
         }
 
         function stopAllPlayback() {
+            assistantSpeaking = false;
             livekitAudioElements.forEach((element) => {
                 try {
                     element.pause();
@@ -514,10 +516,19 @@ LiveKit SFU → Browser playback
                         element.id = `audio-${track.sid}`;
                         document.body.appendChild(element);
                         
+                        element.onended = () => {
+                            console.log(`⏹️ Audio track ended: ${track.sid}`);
+                            assistantSpeaking = false;
+                            if (handsFreeEnabled) {
+                                showStatus('Listening... (hands-free)', 'success');
+                            }
+                        };
+                        
                         const playAudio = () => {
                             console.log(`📡 Attempting to play track: ${track.sid}`);
                             element.play().then(() => {
                                 console.log(`✅ Playing audio track: ${track.sid}`);
+                                assistantSpeaking = true;
                                 showStatus('Assistant is speaking...', 'success');
                             }).catch((err) => {
                                 console.warn(`⚠️ Playback blocked for ${track.sid}:`, err);
@@ -722,6 +733,21 @@ LiveKit SFU → Browser playback
                 if (data.audio && !LIVEKIT_ENABLED) {
                     playAudioResponse(data.audio);
                 }
+                
+                // If using LiveKit and it's a short response, the audio was sent via PCM.
+                // We'll set assistantSpeaking to false after a delay based on text length.
+                if (LIVEKIT_ENABLED) {
+                    const estimatedDuration = (data.text || "").length * 80; // ~80ms per char
+                    setTimeout(() => {
+                        if (assistantSpeaking) {
+                            assistantSpeaking = false;
+                            if (handsFreeEnabled && !isRecording) {
+                                showStatus('Listening... (hands-free)', 'success');
+                            }
+                        }
+                    }, Math.min(estimatedDuration, 5000));
+                }
+                
                 resetMicButton();
             });
 
@@ -733,6 +759,18 @@ LiveKit SFU → Browser playback
 
             socket.on('stop_audio', () => {
                 stopAllPlayback();
+            });
+
+            socket.on('audio_stream_complete', () => {
+                console.log('🏁 Audio stream complete');
+                // Don't set assistantSpeaking to false immediately, 
+                // as there might be buffered audio still playing.
+                setTimeout(() => {
+                    assistantSpeaking = false;
+                    if (handsFreeEnabled && !isRecording) {
+                        showStatus('Listening... (hands-free)', 'success');
+                    }
+                }, 1000);
             });
 
             socket.on('status', (data) => {
@@ -890,7 +928,11 @@ LiveKit SFU → Browser playback
                         sum += data[i] * data[i];
                     }
                     const rms = Math.sqrt(sum / data.length);
-                    if (rms > VAD_THRESHOLD) {
+                    
+                    // If assistant is speaking, use a much higher threshold to avoid self-interruption
+                    const effectiveThreshold = assistantSpeaking ? (VAD_THRESHOLD * 4) : VAD_THRESHOLD;
+                    
+                    if (rms > effectiveThreshold) {
                         vadSpeechFrames += 1;
                         vadSilenceFrames = 0;
                     } else {
