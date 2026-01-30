@@ -655,11 +655,20 @@ socketio = None
 flask_app = None
 
 class AgentProcessor:
-    """Persistent background thread for agent processing to avoid loop conflicts"""
+    """Persistent background thread for agent processing to avoid loop conflicts.
+    
+    Lazy-initialized to avoid conflicts with eventlet/gunicorn during startup.
+    """
     def __init__(self):
         self.loop = None
         self.thread = None
         self.ready = threading.Event()
+        self._initialized = False
+
+    def _ensure_started(self):
+        """Ensure the background thread is started (lazy initialization)."""
+        if self._initialized and self.ready.is_set():
+            return
         self._start_thread()
 
     def _start_thread(self):
@@ -678,15 +687,19 @@ class AgentProcessor:
         self.thread = threading.Thread(target=run_loop, name="AgentProcessorThread", daemon=True)
         self.thread.start()
         self.ready.wait(timeout=5.0)
+        self._initialized = True
 
     def run_coro(self, coro):
+        # Lazy initialization - only start when actually needed
+        self._ensure_started()
+        
         if not self.ready.is_set():
-            print("⚠️ AgentProcessor not ready, restarting thread...", flush=True)
-            self._start_thread()
+            print("⚠️ AgentProcessor not ready after restart attempt", flush=True)
+            raise RuntimeError("AgentProcessor failed to start")
         
         return asyncio.run_coroutine_threadsafe(coro, self.loop)
 
-# Global instance
+# Global instance (lazy - thread not started until first use)
 agent_processor = AgentProcessor()
 
 
