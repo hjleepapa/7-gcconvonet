@@ -119,6 +119,20 @@
         }
         .user .transcript-label { color: #1976d2; }
         .agent .transcript-label { color: #7b1fa2; }
+        .streaming-text {
+            color: #6a1b9a;
+            font-style: italic;
+        }
+        .streaming-text::after {
+            content: "█";
+            animation: blink 1s step-end infinite;
+            font-size: 0.8rem;
+            margin-left: 2px;
+        }
+        @keyframes blink {
+            from, to { opacity: 1; }
+            50% { opacity: 0; }
+        }
         .livekit-status {
             display: inline-flex;
             align-items: center;
@@ -337,9 +351,54 @@ LiveKit SFU → Browser playback
             authMessage.className = `status-message ${type}`;
         }
 
-        function addTranscript(role, text) {
+        let currentStreamingItem = null;
+
+        function addStreamingTranscript(role, text) {
             const box = document.getElementById('transcriptBox');
             if (!box) return;
+            if (box.querySelector('.text-muted')) {
+                box.innerHTML = '';
+            }
+
+            if (!currentStreamingItem || currentStreamingItem.dataset.role !== role) {
+                currentStreamingItem = document.createElement('div');
+                currentStreamingItem.className = `transcript-item ${role}`;
+                currentStreamingItem.dataset.role = role;
+                currentStreamingItem.innerHTML = `
+                    <div class="transcript-label">${role === 'user' ? 'You' : 'Assistant'}</div>
+                    <div class="streaming-text"></div>
+                `;
+                box.appendChild(currentStreamingItem);
+            }
+
+            const textDiv = currentStreamingItem.querySelector('.streaming-text');
+            textDiv.textContent += text;
+            box.scrollTop = box.scrollHeight;
+        }
+
+        function addTranscript(role, text, overwriteStreaming = false) {
+            const box = document.getElementById('transcriptBox');
+            if (!box) return;
+            
+            // If overwriting streaming, use the existing item or create new
+            if (overwriteStreaming && currentStreamingItem && currentStreamingItem.dataset.role === role) {
+                const textDiv = currentStreamingItem.querySelector('.streaming-text');
+                if (textDiv) {
+                    textDiv.textContent = text;
+                    textDiv.className = ''; // Remove streaming style
+                } else {
+                    currentStreamingItem.innerHTML = `
+                        <div class="transcript-label">${role === 'user' ? 'You' : 'Assistant'}</div>
+                        <div>${text}</div>
+                    `;
+                }
+                currentStreamingItem = null; // Reset for next interaction
+                box.scrollTop = box.scrollHeight;
+                return;
+            }
+
+            // Normal path
+            currentStreamingItem = null; // Clear any existing streaming item state
             if (box.querySelector('.text-muted')) {
                 box.innerHTML = '';
             }
@@ -739,9 +798,20 @@ LiveKit SFU → Browser playback
                 }
             });
 
+            socket.on('agent_stream_chunk', (data) => {
+                if (data && data.text) {
+                    // Update assistantSpeaking state so VAD knows to use higher threshold
+                    assistantSpeaking = true;
+                    // Append to the current streaming message if exists, or create new
+                    addStreamingTranscript('agent', data.text);
+                }
+            });
+
             socket.on('agent_response', (data) => {
                 if (data.success && data.text) {
-                    addTranscript('agent', data.text);
+                    // Final response received - replace any streaming text with the final text
+                    // or just ensure the final text is displayed
+                    addTranscript('agent', data.text, true); // true = overwrite streaming
                 }
                 if (data.audio && !LIVEKIT_ENABLED) {
                     playAudioResponse(data.audio);
@@ -949,10 +1019,7 @@ LiveKit SFU → Browser playback
                         if (assistantSpeaking) {
                             console.log(`🗣️ User interrupted assistant (volume: ${rms.toFixed(4)}, threshold: ${effectiveThreshold.toFixed(4)})`);
                             stopAllPlayback();
-                            // Mute mic immediately to prevent further echo loops during the "interrupted" state
-                            await setMicrophoneEnabled(false);
-                            // Then resume it for actual recording after a short delay
-                            setTimeout(() => setMicrophoneEnabled(true), 200);
+                            // No need to mute/unmute mic here as stopAllPlayback() stops the echo source
                         }
                         vadSpeechFrames += 1;
                         vadSilenceFrames = 0;

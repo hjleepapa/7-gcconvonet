@@ -189,6 +189,9 @@ streaming_sessions = {}
 active_response_controls = {}
 BARge_IN_MIN_INTERVAL_SEC = 0.25
 
+# Global guards for sessions to throttle overlapping agent runs
+processing_guards = {}
+
 # One-time model warm-up flag
 MODEL_WARMED = False
 MODEL_WARMUP_LOCK = threading.Lock()
@@ -552,6 +555,11 @@ def register_active_response(session_id: str, cancel_event: threading.Event, tts
 
 
 def cancel_active_response(session_id: str, reason: str = "barge_in"):
+    # Clear processing guard immediately to allow new recording
+    if session_id in processing_guards:
+        processing_guards.pop(session_id, None)
+        print(f"🧹 processing_guard CLEARED via cancel_active_response for session: {session_id}", flush=True)
+        
     control = active_response_controls.get(session_id)
     if control:
         control["cancel_event"].set()
@@ -1243,9 +1251,6 @@ def init_socketio(socketio_instance: SocketIO, app):
             print(f"   ❌ LiveKit Initialization failed: {e}", flush=True)
     else:
         print(f"⚠️ LiveKit Config Skipped (One or more conditions failed)", flush=True)
-
-    # Global guards for this namespace to throttle overlapping agent runs
-    processing_guards = {}
     
     @socketio.on('connect', namespace='/voice')
     def handle_connect():
@@ -1902,36 +1907,18 @@ def init_socketio(socketio_instance: SocketIO, app):
         """Start audio recording"""
         session_id = request.sid
         
-        # Guard: Ignore start recording if already processing a previous request
-        is_busy = processing_guards.get(session_id)
-        if is_busy:
-            print(f"⏩ Session {session_id} is BUSY (processing_guard=True), ignoring start_recording", flush=True)
-            return
-        
         print(f"🎤 [SocketIO] start_recording event received from {session_id}", flush=True)
-        
-        # Get session data
-        session_data = None
-        if redis_manager.is_available():
-            session_data = get_session(session_id)
-            if not session_data:
-                emit('error', {'message': 'Session not found'})
-                return
-        else:
-            if session_id not in active_sessions:
-                emit('error', {'message': 'Session not found'})
-                return
-            session_data = active_sessions[session_id]
-        
-        # Check authentication
-        is_authenticated = session_data.get('authenticated') == 'True' if redis_manager.is_available() else session_data.get('authenticated', False)
-        if not is_authenticated:
-            emit('error', {'message': 'Please authenticate first'})
-            return
-        
+
         # Barge-in: stop any active response immediately when user starts speaking
+        # This will also clear the processing guard via cancel_active_response
         if session_id in active_response_controls:
             cancel_active_response(session_id, reason="barge_in_start_recording")
+        
+        # Guard: Ignore start recording if STILL busy (rare, but possible if cancel failed)
+        is_busy = processing_guards.get(session_id)
+        if is_busy:
+            print(f"⏩ Session {session_id} is STILL BUSY (processing_guard=True), ignoring start_recording", flush=True)
+            return
         
         print(f"🎤 Recording started: {session_id}")
         
@@ -2136,9 +2123,16 @@ def init_socketio(socketio_instance: SocketIO, app):
         
         print(f"🛑 [SocketIO] stop_recording event received from {session_id}", flush=True)
         
-        # Guard: Ignore redundant stop events if already processing
+        # If busy, wait a tiny bit for previous cancel to finish, then check again
         if processing_guards.get(session_id):
-            print(f"⏩ Session {session_id} is BUSY (processing_guard=True), ignoring stop_recording", flush=True)
+            try:
+                socketio.sleep(0.2)
+            except:
+                time.sleep(0.2)
+            
+        # Guard: Ignore redundant stop events if STILL busy
+        if processing_guards.get(session_id):
+            print(f"⏩ Session {session_id} is STILL BUSY (processing_guard=True), ignoring stop_recording", flush=True)
             return
         
         # Capture stop recording event in Sentry
@@ -2343,6 +2337,7 @@ def init_socketio(socketio_instance: SocketIO, app):
                             session.send_pcm(audio_bytes, sample_rate=48000, channels=1)
                         
                         socketio.emit('welcome_greeting', {
+                            'success': True,
                             'text': welcome_text
                         }, namespace='/voice', room=session_id)
                     else:
@@ -2457,6 +2452,15 @@ def init_socketio(socketio_instance: SocketIO, app):
                         sentry_capture_voice_event("transcription_failed", session_id, session.get('user_id'), details={"method": "deepgram", "error": str(e)})
                         return
                 
+                # Send transcription to client immediately (for both Batch and Streaming paths)
+                if transcribed_text:
+                    print(f"📤 Sending transcription to client: {transcribed_text[:50]}...", flush=True)
+                    socketio.emit('transcription', {
+                        'success': True, 
+                        'text': transcribed_text,
+                        'is_streaming': bool(transcribed_text_override)
+                    }, namespace='/voice', room=session_id)
+                
                 print(f"🔍 Checking if transcribed_text is empty...", flush=True)
                 sys.stdout.flush()
                 if not transcribed_text:
@@ -2474,17 +2478,6 @@ def init_socketio(socketio_instance: SocketIO, app):
                 sys.stdout.flush()
                 sentry_capture_voice_event("transcription_completed", session_id, session.get('user_id'), details={"text_length": len(transcribed_text), "method": "deepgram"})
                 print(f"✅ sentry_capture_voice_event completed", flush=True)
-                sys.stdout.flush()
-                
-                # Send transcription to client
-                print(f"📤 Sending transcription to client...", flush=True)
-                sys.stdout.flush()
-                socketio.emit('transcription', {
-                    'success': True,
-                    'text': transcribed_text,
-                    'method': 'assemblyai'
-                }, namespace='/voice', room=session_id)
-                print(f"✅ Transcription sent to client", flush=True)
                 sys.stdout.flush()
                 
                 print(f"🔍 Checking for transfer intent...", flush=True)
