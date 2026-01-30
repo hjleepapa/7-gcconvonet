@@ -414,10 +414,11 @@ LiveKit SFU → Browser playback
 
         function stopAllPlayback() {
             assistantSpeaking = false;
-            livekitAudioElements.forEach((element) => {
+            livekitAudioElements.forEach((element, sid) => {
                 try {
                     element.pause();
                     element.currentTime = 0;
+                    console.log(`⏸️ Paused LiveKit audio element: ${sid}`);
                 } catch (e) {
                     console.warn('⚠️ Error stopping LiveKit audio element:', e);
                 }
@@ -430,6 +431,22 @@ LiveKit SFU → Browser playback
                     console.warn('⚠️ Error stopping fallback audio:', e);
                 }
             }
+        }
+
+        function resumeLiveKitPlayback() {
+            if (!LIVEKIT_ENABLED) return;
+            livekitAudioElements.forEach((element, sid) => {
+                try {
+                    if (element.paused) {
+                        console.log(`▶️ Resuming LiveKit audio element: ${sid}`);
+                        element.play().catch(err => {
+                            console.warn(`⚠️ Failed to resume playback for ${sid}:`, err);
+                        });
+                    }
+                } catch (e) {
+                    console.warn('⚠️ Error resuming LiveKit audio element:', e);
+                }
+            });
         }
 
         function playAudioResponse(base64Audio) {
@@ -804,6 +821,8 @@ LiveKit SFU → Browser playback
                 if (data && data.text) {
                     // Update assistantSpeaking state so VAD knows to use higher threshold
                     assistantSpeaking = true;
+                    // Ensure LiveKit audio element is playing (it might have been paused by VAD)
+                    resumeLiveKitPlayback();
                     // Append to the current streaming message if exists, or create new
                     addStreamingTranscript('agent', data.text);
                 }
@@ -815,6 +834,8 @@ LiveKit SFU → Browser playback
                     // Final response received - replace any streaming text with the final text
                     // or just ensure the final text is displayed
                     addTranscript('agent', data.text, true); // true = overwrite streaming
+                    // Ensure playback is resumed for the final response too
+                    resumeLiveKitPlayback();
                 }
                 if (data.audio && !LIVEKIT_ENABLED) {
                     playAudioResponse(data.audio);
@@ -1017,7 +1038,7 @@ LiveKit SFU → Browser playback
                     const rms = Math.sqrt(sum / data.length);
                     
                 // If assistant is speaking, use a MUCH higher threshold to avoid self-interruption (echo)
-                const effectiveThreshold = assistantSpeaking ? (VAD_THRESHOLD * 25) : VAD_THRESHOLD;
+                const effectiveThreshold = assistantSpeaking ? (VAD_THRESHOLD * 35) : VAD_THRESHOLD;
                     
                     if (rms > effectiveThreshold) {
                         if (assistantSpeaking) {
