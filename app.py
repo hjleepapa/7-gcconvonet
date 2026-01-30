@@ -88,9 +88,16 @@ def create_app():
         print(f"⚠️  Could not import models: {e}")
     
     # Initialize Socket.IO for WebRTC voice
-    # Use 'eventlet' for production (Gunicorn compatibility)
-    # Use 'threading' for local development
-    socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+    # Use 'eventlet' for production (Gunicorn with eventlet worker)
+    # Use 'threading' for local development without gunicorn
+    # Detect if we're running under eventlet
+    import sys
+    if 'eventlet' in sys.modules and hasattr(sys.modules['eventlet'], 'monkey_patch'):
+        async_mode = 'eventlet'
+    else:
+        async_mode = 'threading'
+    print(f"🔌 SocketIO async_mode: {async_mode}")
+    socketio = SocketIO(app, cors_allowed_origins="*", async_mode=async_mode)
 
     # --- Register Blueprints ---
     # Import and register blueprints after all extensions are fully configured.
