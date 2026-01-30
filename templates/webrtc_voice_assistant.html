@@ -790,6 +790,7 @@ LiveKit SFU → Browser playback
             });
 
             socket.on('transcription', (data) => {
+                console.log('🎤 Transcription received:', data);
                 if (data.success) {
                     addTranscript('user', data.text);
                 } else {
@@ -799,6 +800,7 @@ LiveKit SFU → Browser playback
             });
 
             socket.on('agent_stream_chunk', (data) => {
+                console.log('📡 Agent stream chunk:', data);
                 if (data && data.text) {
                     // Update assistantSpeaking state so VAD knows to use higher threshold
                     assistantSpeaking = true;
@@ -808,6 +810,7 @@ LiveKit SFU → Browser playback
             });
 
             socket.on('agent_response', (data) => {
+                console.log('🤖 Agent response:', data);
                 if (data.success && data.text) {
                     // Final response received - replace any streaming text with the final text
                     // or just ensure the final text is displayed
@@ -835,6 +838,7 @@ LiveKit SFU → Browser playback
             });
 
             socket.on('welcome_greeting', (data) => {
+                console.log('📣 Welcome greeting:', data);
                 if (data.text) {
                     addTranscript('agent', data.text);
                 }
@@ -1012,8 +1016,8 @@ LiveKit SFU → Browser playback
                     }
                     const rms = Math.sqrt(sum / data.length);
                     
-                    // If assistant is speaking, use a MUCH higher threshold to avoid self-interruption (echo)
-                    const effectiveThreshold = assistantSpeaking ? (VAD_THRESHOLD * 15) : VAD_THRESHOLD;
+                // If assistant is speaking, use a MUCH higher threshold to avoid self-interruption (echo)
+                const effectiveThreshold = assistantSpeaking ? (VAD_THRESHOLD * 20) : VAD_THRESHOLD;
                     
                     if (rms > effectiveThreshold) {
                         if (assistantSpeaking) {

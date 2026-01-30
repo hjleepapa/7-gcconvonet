@@ -1920,6 +1920,25 @@ def init_socketio(socketio_instance: SocketIO, app):
             print(f"⏩ Session {session_id} is STILL BUSY (processing_guard=True), ignoring start_recording", flush=True)
             return
         
+        # Get session data
+        session_data = None
+        if redis_manager.is_available():
+            session_data = get_session(session_id)
+            if not session_data:
+                emit('error', {'message': 'Session not found'})
+                return
+        else:
+            if session_id not in active_sessions:
+                emit('error', {'message': 'Session not found'})
+                return
+            session_data = active_sessions[session_id]
+        
+        # Check authentication
+        is_authenticated = session_data.get('authenticated') == 'True' if redis_manager.is_available() else session_data.get('authenticated', False)
+        if not is_authenticated:
+            emit('error', {'message': 'Please authenticate first'})
+            return
+
         print(f"🎤 Recording started: {session_id}")
         
         # Update recording state and clear audio buffer
