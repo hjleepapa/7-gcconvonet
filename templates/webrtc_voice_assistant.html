@@ -507,11 +507,15 @@ LiveKit SFU → Browser playback
                         const element = track.attach();
                         element.autoplay = true;
                         element.playsInline = true;
-                        element.style.display = 'none';
+                        // element.style.display = 'none'; // REMOVED: display:none can sometimes block playback in some browsers
+                        element.style.position = 'absolute';
+                        element.style.opacity = '0';
+                        element.style.pointerEvents = 'none';
                         element.id = `audio-${track.sid}`;
                         document.body.appendChild(element);
                         
                         const playAudio = () => {
+                            console.log(`📡 Attempting to play track: ${track.sid}`);
                             element.play().then(() => {
                                 console.log(`✅ Playing audio track: ${track.sid}`);
                                 showStatus('Assistant is speaking...', 'success');
@@ -521,7 +525,9 @@ LiveKit SFU → Browser playback
                             });
                         };
 
-                        playAudio();
+                        // Small delay to ensure DOM attachment
+                        setTimeout(playAudio, 100);
+                        
                         // Retry on next click if blocked
                         document.addEventListener('click', playAudio, { once: true });
                         
