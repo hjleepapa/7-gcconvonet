@@ -933,7 +933,7 @@ LiveKit SFU → Browser playback
                 vadAnalyser.fftSize = 2048;
                 source.connect(vadAnalyser);
                 const data = new Float32Array(vadAnalyser.fftSize);
-                vadTimer = setInterval(() => {
+                vadTimer = setInterval(async () => {
                     if (!vadAnalyser) return;
                     vadAnalyser.getFloatTimeDomainData(data);
                     let sum = 0;
