@@ -155,6 +155,16 @@
             background: #f8d7da;
             color: #dc3545;
         }
+        .livekit-status.speaking {
+            background: #f3e5f5;
+            color: #7b1fa2;
+            animation: pulse-purple 1.5s infinite;
+        }
+        @keyframes pulse-purple {
+            0% { box-shadow: 0 0 0 0 rgba(123, 31, 162, 0.4); }
+            70% { box-shadow: 0 0 0 10px rgba(123, 31, 162, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(123, 31, 162, 0); }
+        }
         .debug-panel {
             background: #f8f9fa;
             border: 1px solid #dee2e6;
@@ -191,6 +201,10 @@
             <div class="livekit-status offline" id="livekitStatus">
                 <i class="fas fa-circle"></i>
                 <span>LiveKit: disconnected</span>
+            </div>
+            <div id="speakingIndicator" class="livekit-status speaking" style="display: none; margin-left: 10px;">
+                <i class="fas fa-volume-up"></i>
+                <span>Assistant Speaking</span>
             </div>
         </div>
 
@@ -255,6 +269,21 @@ LiveKit SFU → Browser playback
         let localAudioTrack = null;
         let handsFreeEnabled = true;
         let assistantSpeaking = false;
+        function setAssistantSpeaking(value, reason = 'unknown') {
+            if (assistantSpeaking !== value) {
+                console.log(`🎙️ assistantSpeaking: ${assistantSpeaking} -> ${value} (reason: ${reason})`);
+                assistantSpeaking = value;
+                
+                const indicator = document.getElementById('speakingIndicator');
+                if (indicator) {
+                    indicator.style.display = value ? 'inline-flex' : 'none';
+                }
+                
+                if (value) {
+                    assistantStartedSpeakingAt = Date.now();
+                }
+            }
+        }
         let vadContext = null;
         let vadAnalyser = null;
         let vadTimer = null;
@@ -275,6 +304,7 @@ LiveKit SFU → Browser playback
         const VAD_THRESHOLD = 0.015;
         const VAD_SPEECH_FRAMES = 3;
         const VAD_SILENCE_FRAMES = 12;
+        let assistantStartedSpeakingAt = 0;
         handsFreeEnabled = LIVEKIT_ENABLED;
         const LIVEKIT_DEBUG = window.location.search.includes('livekitDebug=1');
 
@@ -417,7 +447,7 @@ LiveKit SFU → Browser playback
         }
 
         function stopAllPlayback() {
-            assistantSpeaking = false;
+            setAssistantSpeaking(false, 'stopAllPlayback');
             livekitAudioElements.forEach((element, sid) => {
                 try {
                     element.pause();
@@ -606,7 +636,7 @@ LiveKit SFU → Browser playback
                         
                         element.onended = () => {
                             console.log(`⏹️ Audio track ended: ${track.sid}`);
-                            assistantSpeaking = false;
+                            setAssistantSpeaking(false, 'onended');
                             if (handsFreeEnabled) {
                                 showStatus('Listening... (hands-free)', 'success');
                             }
@@ -616,7 +646,8 @@ LiveKit SFU → Browser playback
                             console.log(`📡 Attempting to play track: ${track.sid}`);
                             element.play().then(() => {
                                 console.log(`✅ Playing audio track: ${track.sid}`);
-                                assistantSpeaking = true;
+                                setAssistantSpeaking(true, 'playAudio success');
+                                assistantStartedSpeakingAt = Date.now();
                                 livekitPlaybackReady = true;
                                 livekitPlaybackBlocked = false;
                                 lastLivekitPlaybackAt = Date.now();
@@ -830,7 +861,8 @@ LiveKit SFU → Browser playback
                 console.log('📡 Agent stream chunk:', data);
                 if (data && data.text) {
                     // Update assistantSpeaking state so VAD knows to use higher threshold
-                    assistantSpeaking = true;
+                    setAssistantSpeaking(true, 'agent_stream_chunk');
+                    assistantStartedSpeakingAt = Date.now();
                     // Ensure LiveKit audio element is playing (it might have been paused by VAD)
                     resumeLiveKitPlayback();
                     // Append to the current streaming message if exists, or create new
@@ -846,6 +878,8 @@ LiveKit SFU → Browser playback
                     addTranscript('agent', data.text, true); // true = overwrite streaming
                     // Ensure playback is resumed for the final response too
                     resumeLiveKitPlayback();
+                    setAssistantSpeaking(true, 'agent_response');
+                    assistantStartedSpeakingAt = Date.now();
                 }
                 if (data.audio && !LIVEKIT_ENABLED) {
                     playAudioResponse(data.audio);
@@ -869,7 +903,7 @@ LiveKit SFU → Browser playback
                     const estimatedDuration = (data.text || "").length * 80; // ~80ms per char
                     setTimeout(() => {
                         if (assistantSpeaking) {
-                            assistantSpeaking = false;
+                            setAssistantSpeaking(false, 'agent_response timeout');
                             if (handsFreeEnabled && !isRecording) {
                                 showStatus('Listening... (hands-free)', 'success');
                             }
@@ -902,9 +936,13 @@ LiveKit SFU → Browser playback
                 // Don't set assistantSpeaking to false immediately, 
                 // as there might be buffered audio still playing.
                 setTimeout(() => {
-                    assistantSpeaking = false;
-                    if (handsFreeEnabled && !isRecording) {
-                        showStatus('Listening... (hands-free)', 'success');
+                    const elapsedSinceStart = Date.now() - assistantStartedSpeakingAt;
+                    // Only clear if we haven't just started a new chunk
+                    if (elapsedSinceStart > 1000) {
+                        setAssistantSpeaking(false, 'audio_stream_complete timeout');
+                        if (handsFreeEnabled && !isRecording) {
+                            showStatus('Listening... (hands-free)', 'success');
+                        }
                     }
                 }, 1000);
             });
@@ -1069,8 +1107,20 @@ LiveKit SFU → Browser playback
                     }
                     const rms = Math.sqrt(sum / data.length);
                     
+                    // Debug: log high volume frames
+                    if (rms > VAD_THRESHOLD * 0.5) {
+                        // console.log(`🔊 VAD RMS: ${rms.toFixed(4)} (threshold: ${effectiveThreshold.toFixed(4)}, as: ${assistantSpeaking})`);
+                    }
+                    
+                // Cooldown: ignore VAD for 1 second after assistant starts speaking to avoid echo from start of audio
+                const timeSinceAssistantStarted = Date.now() - assistantStartedSpeakingAt;
+                if (assistantSpeaking && timeSinceAssistantStarted < 1000) {
+                    return;
+                }
+
                 // If assistant is speaking, use a MUCH higher threshold to avoid self-interruption (echo)
-                const effectiveThreshold = assistantSpeaking ? (VAD_THRESHOLD * 35) : VAD_THRESHOLD;
+                // Increased multiplier from 35 to 50 for more safety
+                const effectiveThreshold = assistantSpeaking ? (VAD_THRESHOLD * 50) : VAD_THRESHOLD;
                     
                     if (rms > effectiveThreshold) {
                         if (assistantSpeaking) {

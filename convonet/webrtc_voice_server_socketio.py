@@ -629,7 +629,8 @@ def register_active_response(session_id: str, cancel_event: threading.Event, tts
     active_response_controls[session_id] = {
         "cancel_event": cancel_event,
         "tts_stream": tts_stream,
-        "last_barge_in": 0.0
+        "last_barge_in": 0.0,
+        "start_time": time.time()
     }
 
 
@@ -652,6 +653,41 @@ def cancel_active_response(session_id: str, reason: str = "barge_in"):
 # Global references for background tasks
 socketio = None
 flask_app = None
+
+class AgentProcessor:
+    """Persistent background thread for agent processing to avoid loop conflicts"""
+    def __init__(self):
+        self.loop = None
+        self.thread = None
+        self.ready = threading.Event()
+        self._start_thread()
+
+    def _start_thread(self):
+        def run_loop():
+            self.loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self.loop)
+            try:
+                import nest_asyncio
+                nest_asyncio.apply(self.loop)
+            except:
+                pass
+            self.ready.set()
+            print("🧵 AgentProcessor: Background loop started", flush=True)
+            self.loop.run_forever()
+
+        self.thread = threading.Thread(target=run_loop, name="AgentProcessorThread", daemon=True)
+        self.thread.start()
+        self.ready.wait(timeout=5.0)
+
+    def run_coro(self, coro):
+        if not self.ready.is_set():
+            print("⚠️ AgentProcessor not ready, restarting thread...", flush=True)
+            self._start_thread()
+        
+        return asyncio.run_coroutine_threadsafe(coro, self.loop)
+
+# Global instance
+agent_processor = AgentProcessor()
 
 
 def build_customer_profile_from_session(session_data: dict | None) -> dict | None:
@@ -1991,7 +2027,14 @@ def init_socketio(socketio_instance: SocketIO, app):
         # Barge-in: stop any active response immediately when user starts speaking
         # This will also clear the processing guard via cancel_active_response
         if session_id in active_response_controls:
-            cancel_active_response(session_id, reason="barge_in_start_recording")
+            control = active_response_controls.get(session_id)
+            # Add a small grace period (0.5s) to avoid immediate self-interruption from echo
+            # or from the start of the assistant speaking
+            start_time = control.get("start_time", 0)
+            if time.time() - start_time > 0.5:
+                cancel_active_response(session_id, reason="barge_in_start_recording")
+            else:
+                print(f"⏩ Ignoring barge-in for session {session_id} (grace period)", flush=True)
         
         # Guard: Ignore start recording if STILL busy (rare, but possible if cancel failed)
         is_busy = processing_guards.get(session_id)
@@ -2870,91 +2913,48 @@ def init_socketio(socketio_instance: SocketIO, app):
                         print(f"⚠️ Filler TTS failed: {filler_error}", flush=True)
                 
                 try:
-                    print(f"🔧 Setting up ThreadPoolExecutor...", flush=True)
+                    print(f"🚀 Submitting agent task to persistent background thread...", flush=True)
                     sys.stdout.flush()
-                    # Use eventlet's spawn_n to run async code in completely separate greenlet
-                    # This prevents blocking the main eventlet worker
-                    import eventlet
-                    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
                     
-                    result_container = {'response': None, 'transfer': None, 'error': None, 'done': False}
+                    # Use timeout that matches routes.py execution_timeout (15s for Claude/OpenAI, 12s for Gemini)
+                    timeout_seconds = 60.0
                     
-                    print(f"🔧 Defining run_async_in_thread function...", flush=True)
-                    sys.stdout.flush()
-                    def run_async_in_thread():
-                        """Run async function in a new thread with its own event loop"""
-                        import sys
-                        print(f"🧵 Thread started for async execution", flush=True)
-                        sys.stdout.flush()
-                        
-                        # Create new event loop for this thread
-                        print(f"🔧 Creating new event loop in thread...", flush=True)
-                        sys.stdout.flush()
-                        new_loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(new_loop)
-                        print(f"✅ Event loop created and set", flush=True)
-                        sys.stdout.flush()
-                        
-                        # Use timeout that matches routes.py execution_timeout (15s for Claude/OpenAI, 12s for Gemini)
-                        # Add buffer for tool execution which can be slow (MCP calls, API calls, etc.)
-                        # Increased to 60s to allow for database operations and external API calls
-                        # Tool execution (calendar event creation, database operations) can take time
-                        timeout_seconds = 60.0  # Increased from 20s to allow tool execution time
+                    # Define the task to run in the background thread
+                    async def agent_task():
                         try:
-                            print(f"🔄 Running process_with_agent in thread (timeout: {timeout_seconds}s)...", flush=True)
-                            sys.stdout.flush()
-                            result = new_loop.run_until_complete(
-                                asyncio.wait_for(
-                                    process_with_agent(
-                                        transcribed_text,
-                                        session['user_id'],
-                                        session['user_name'],
-                                        socketio=socketio_instance,
-                                        session_id=session_id,
-                                        text_chunk_callback=text_chunk_callback,  # Pass callback for early TTS (from outer scope)
-                                        tool_call_callback=tool_call_callback     # Pass callback for filler on tool calls
-                                    ),
-                                    timeout=timeout_seconds
-                                )
+                            print(f"🔄 Running process_with_agent in background loop...", flush=True)
+                            result = await asyncio.wait_for(
+                                process_with_agent(
+                                    transcribed_text,
+                                    session['user_id'],
+                                    session['user_name'],
+                                    socketio=socketio_instance,
+                                    session_id=session_id,
+                                    text_chunk_callback=text_chunk_callback,
+                                    tool_call_callback=tool_call_callback
+                                ),
+                                timeout=timeout_seconds
                             )
-                            print(f"✅ process_with_agent completed in thread", flush=True)
-                            sys.stdout.flush()
+                            print(f"✅ process_with_agent completed in background loop", flush=True)
                             result_container['response'] = result[0]
                             result_container['transfer'] = result[1]
                             result_container['done'] = True
                             return result
                         except asyncio.TimeoutError:
-                            print(f"⏱️ Async timeout in thread after {timeout_seconds} seconds", flush=True)
-                            sys.stdout.flush()
+                            print(f"⏱️ Async timeout in background loop after {timeout_seconds} seconds", flush=True)
                             result_container['error'] = 'timeout'
                             result_container['done'] = True
                             raise
                         except Exception as e:
-                            print(f"❌ Error in thread: {e}", flush=True)
-                            sys.stdout.flush()
+                            print(f"❌ Error in background loop: {e}", flush=True)
                             import traceback
                             traceback.print_exc()
                             result_container['error'] = str(e)
                             result_container['done'] = True
                             raise
-                        finally:
-                            print(f"🧵 Closing event loop...", flush=True)
-                            sys.stdout.flush()
-                            try:
-                                # Cancel any pending tasks
-                                pending = asyncio.all_tasks(new_loop)
-                                for task in pending:
-                                    task.cancel()
-                                new_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-                            except:
-                                pass
-                            new_loop.close()
-                            print(f"🧵 Thread event loop closed", flush=True)
-                            sys.stdout.flush()
-                    
-                    # Run in thread pool with aggressive timeout for Gemini hackathon
-                    print(f"🚀 Submitting to ThreadPoolExecutor...", flush=True)
-                    sys.stdout.flush()
+
+                    # Submit to the persistent loop
+                    future = agent_processor.run_coro(agent_task())
                     
                     # Function to generate early TTS for first sentence
                     def generate_early_tts(first_sentence: str):
@@ -2997,98 +2997,50 @@ def init_socketio(socketio_instance: SocketIO, app):
                                     print(f"📤 Emitted EARLY LiveKit audio chunk ({len(chunk_audio)} bytes)", flush=True)
                                 else:
                                     chunk_base64 = base64.b64encode(chunk_audio).decode('utf-8')
-                                    with text_accumulator['lock']:
-                                        text_accumulator['early_audio_chunks'].append({
-                                            'chunk_index': text_accumulator['early_chunk_index'],
-                                            'audio': chunk_base64,
-                                            'is_final': False
-                                        })
-                                        text_accumulator['early_chunk_index'] += 1
-                                    
-                                    # Emit early audio chunk immediately
-                                    emit_socketio = socketio if socketio else (socketio_instance_global if 'socketio_instance_global' in globals() else None)
-                                    if emit_socketio:
-                                        try:
-                                            emit_socketio.emit('audio_chunk', {
-                                                'success': True,
-                                                'chunk_index': 0,
-                                                'total_chunks': -1,  # Unknown at this point
-                                                'audio': chunk_base64,
-                                                'is_final': False,
-                                                'is_early': True  # Mark as early chunk
-                                            }, namespace='/voice', room=session_id)
-                                            print(f"📤 Emitted EARLY audio chunk ({len(chunk_base64)} chars)", flush=True)
-                                        except Exception as emit_error:
-                                            print(f"⚠️ Error emitting early chunk: {emit_error}", flush=True)
-                            else:
-                                print(f"⚠️ Failed to generate early TTS audio", flush=True)
-                        except Exception as e:
-                            print(f"❌ Error in early TTS generation: {e}", flush=True)
-                            import traceback
-                            traceback.print_exc()
-                    
-                    with ThreadPoolExecutor(max_workers=2) as executor:  # Increased to 2 for early TTS thread
-                        print(f"✅ ThreadPoolExecutor created, submitting task...", flush=True)
-                        sys.stdout.flush()
-                        future = executor.submit(run_async_in_thread)
-                        print(f"✅ Task submitted to executor, future created", flush=True)
-                        sys.stdout.flush()
-                        
-                        if streaming_tts:
-                            print("🔊 Streaming TTS active - skipping early sentence TTS", flush=True)
-                        else:
-                            # LATENCY OPTIMIZATION: Wait for first sentence and start TTS early
-                            # This allows TTS to start while agent is still processing (tool execution, etc.)
-                            print(f"⏳ Waiting for first sentence (max 10s)...", flush=True)
-                            first_sentence_ready = text_accumulator['first_sentence_ready'].wait(timeout=10.0)
+                                    socketio_instance.emit('audio_chunk', {
+                                        'success': True,
+                                        'chunk_index': 0,
+                                        'total_chunks': 1,
+                                        'audio': chunk_base64,
+                                        'is_final': True,
+                                        'is_early': True
+                                    }, namespace='/voice', room=session_id)
+                                    print(f"📤 Emitted EARLY audio chunk ({len(chunk_audio)} bytes)", flush=True)
                             
-                            if first_sentence_ready and text_accumulator['first_sentence']:
-                                first_sentence = text_accumulator['first_sentence']
-                                print(f"✅ First sentence ready! Starting early TTS: {first_sentence[:80]}...", flush=True)
-                                # Emit status on main thread to avoid race condition with agent_response
-                                if socketio:
-                                    socketio.emit('status', {'message': 'Generating speech...'}, namespace='/voice', room=session_id)
-                                # Start early TTS generation in background thread
-                                early_tts_future = executor.submit(generate_early_tts, first_sentence)
-                            else:
-                                print(f"⏳ First sentence not ready yet, continuing...", flush=True)
-                        
-                        # Use 60s timeout to allow for tool execution (database operations, API calls)
-                        # Tool execution (MCP calls, API calls, database operations) can take time
-                        # Increased from 25s to 60s to handle complex operations like calendar event creation
-                        executor_timeout = 90.0  # Increased for MCP tools loading (was 60s)
-                        try:
-                            print(f"⏳ Waiting for agent result with {executor_timeout}s timeout...", flush=True)
-                            sys.stdout.flush()
-                            
-                            # Get final result (wait for completion)
-                            agent_response, transfer_marker = future.result(timeout=executor_timeout)
-                            print(f"🤖 Agent response received: {agent_response[:100] if agent_response else 'None'}", flush=True)
-                            sys.stdout.flush()
-                        except FutureTimeoutError:
-                            print(f"⏱️ ThreadPoolExecutor timed out after {executor_timeout} seconds", flush=True)
-                            sys.stdout.flush()
-                            agent_response = "I'm sorry, I'm taking too long to process that request. Please try a simpler request or try again."
-                            transfer_marker = None
-                            # Cancel the future if possible
-                            try:
-                                future.cancel()
-                                print(f"✅ Future cancelled", flush=True)
-                                sys.stdout.flush()
-                            except:
-                                pass
-                        except asyncio.TimeoutError as e:
-                            print(f"⏱️ Async timeout: {e}", flush=True)
-                            sys.stdout.flush()
-                            agent_response = "I'm sorry, I'm taking too long to process that request. Please try a simpler request or switch to Claude model."
-                            transfer_marker = None
+                            # Set flag so we don't repeat this sentence in streaming TTS
+                            with text_accumulator['lock']:
+                                text_accumulator['tts_started'] = True
+                                text_accumulator['tts_started_event'].set()
+                                
                         except Exception as e:
-                            print(f"❌ Exception in ThreadPoolExecutor: {e}", flush=True)
-                            sys.stdout.flush()
-                            import traceback
-                            traceback.print_exc()
-                            agent_response = "I'm sorry, I encountered an error. Please try again."
-                            transfer_marker = None
+                            print(f"⚠️ Early TTS generation failed: {e}", flush=True)
+
+                    # Wait for first sentence if needed
+                    # We use a shorter timeout for first sentence to keep latency low
+                    print(f"⏳ Waiting for first sentence or final response...", flush=True)
+                    if text_accumulator['first_sentence_ready'].wait(timeout=10.0):
+                        first_sent = text_accumulator['first_sentence']
+                        if first_sent and not result_container['done']:
+                            # Run early TTS in a separate thread to not block waiting for the main result
+                            threading.Thread(target=generate_early_tts, args=(first_sent,), daemon=True).start()
+                    else:
+                        print(f"⏳ First sentence not ready yet, continuing...", flush=True)
+
+                    # Wait for the main agent task to complete
+                    # We use a timeout slightly longer than the internal task timeout
+                    executor_timeout = timeout_seconds + 5.0
+                    try:
+                        print(f"⏳ Waiting for agent result with {executor_timeout}s timeout...", flush=True)
+                        result = future.result(timeout=executor_timeout)
+                        agent_response, transfer_marker = result
+                    except Exception as e:
+                        print(f"❌ Error waiting for agent result: {e}", flush=True)
+                        agent_response = result_container.get('response') or "I'm sorry, I encountered an error. Please try again."
+                        transfer_marker = result_container.get('transfer')
+                except Exception as e:
+                    print(f"❌ Exception in agent processing: {e}", flush=True)
+                    agent_response = "I'm sorry, I encountered an error. Please try again."
+                    transfer_marker = None
                 except asyncio.TimeoutError:
                     print(f"⏱️ Agent processing timed out after 18 seconds (async timeout)")
                     agent_response = "I'm sorry, I'm taking too long to process that request. Please try a simpler request."

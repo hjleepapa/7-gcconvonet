@@ -39,17 +39,12 @@ logger = logging.getLogger(__name__)
 _agent_graph_cache = None
 _agent_graph_model = None  # Track which model was used for the cached graph
 _agent_graph_provider = None  # Track which provider was used for the cached graph
-_agent_graph_lock = asyncio.Lock()
+_agent_graph_lock = None  # Lazy initialized to avoid loop conflicts
 
 # Global MCP tools cache (pre-loaded at startup to avoid hangs during requests)
 _mcp_tools_cache = None
 _mcp_tools_loading = False
-_mcp_tools_lock = asyncio.Lock()
-
-# Global MCP tools cache (loaded at startup to avoid hangs during requests)
-_mcp_tools_cache = None
-_mcp_tools_loading = False
-_mcp_tools_lock = asyncio.Lock()
+_mcp_tools_lock = None  # Lazy initialized to avoid loop conflicts
 
 convonet_todo_bp = Blueprint(
     'convonet_todo',
@@ -977,6 +972,10 @@ async def _preload_mcp_tools():
             return _mcp_tools_cache
         return []
     
+    global _mcp_tools_lock
+    if _mcp_tools_lock is None:
+        _mcp_tools_lock = asyncio.Lock()
+        
     async with _mcp_tools_lock:
         # Check again after acquiring lock
         if _mcp_tools_cache is not None:
@@ -1175,6 +1174,10 @@ async def _get_agent_graph(
             _agent_graph_provider = None
     
     # Use lock to prevent multiple simultaneous initializations
+    global _agent_graph_lock
+    if _agent_graph_lock is None:
+        _agent_graph_lock = asyncio.Lock()
+        
     async with _agent_graph_lock:
         # Check again after acquiring lock (another thread might have initialized)
         if (_agent_graph_cache is not None and 
@@ -1814,12 +1817,19 @@ async def _run_agent_async(
         sys.stdout.flush()
         
         async def process_stream():
+            # Ensure we have a running loop in this context
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                print("⚠️ No running event loop in process_stream, attempting to use current loop")
+                loop = asyncio.get_event_loop()
+            
             # Import time module explicitly to avoid scoping issues
             # Use 'import time' at function start to ensure it's available
             last_streamed_text = ""
             last_streamed_msg_id = None
             import time as time_module
-            import asyncio
+            import asyncio as asyncio_mod
             import uuid
             # Capture start_time from outer scope IMMEDIATELY
             # This must happen before any other code to avoid scoping issues
