@@ -2029,6 +2029,26 @@ def init_socketio(socketio_instance: SocketIO, app):
         except Exception as e:
             print(f"⚠️ LiveKit client state log failed: {e}", flush=True)
     
+    @socketio.on('stop_audio', namespace='/voice')
+    def handle_stop_audio():
+        """Stop/interrupt current audio playback on LiveKit"""
+        session_id = request.sid
+        print(f"🛑 [SocketIO] stop_audio event received from {session_id}", flush=True)
+        
+        try:
+            # Interrupt the LiveKit session's audio sending
+            if _livekit_active():
+                lk_session = livekit_manager.get_session(session_id)
+                if lk_session:
+                    lk_session.interrupt()
+                    print(f"✅ LiveKit audio interrupted for session {session_id}", flush=True)
+            
+            # Also cancel any active response generation
+            if session_id in active_response_controls:
+                cancel_active_response(session_id, reason="stop_audio")
+        except Exception as e:
+            print(f"⚠️ Error stopping audio for session {session_id}: {e}", flush=True)
+    
     
     @socketio.on('start_recording', namespace='/voice')
     def handle_start_recording():

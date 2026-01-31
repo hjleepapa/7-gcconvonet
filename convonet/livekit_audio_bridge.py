@@ -133,6 +133,7 @@ class LiveKitRoomSession:
         self._send_lock = None # Will be initialized in start() loop
         self.local_track = None # To prevent GC
         self.assistant_speaking = False # Track if assistant is talking
+        self._interrupted = False  # Flag to interrupt audio playback
         # NO MORE RECORDING LOCK - using atomic boolean and queue
 
     def start(self):
@@ -141,6 +142,12 @@ class LiveKitRoomSession:
         self.thread = real_threading.Thread(target=self._run_loop, name=f"LK-{self.token[-5:]}", daemon=True)
         self.thread.start()
         # The caller can poll ready.is_set() or just trust the background task.
+
+    def interrupt(self):
+        """Interrupt current audio playback - stop sending audio frames"""
+        self._interrupted = True
+        self.assistant_speaking = False
+        print(f"🛑 LiveKit audio interrupted for session", flush=True)
 
     def close(self):
         self._closed = True
@@ -186,6 +193,9 @@ class LiveKitRoomSession:
              print(f"⚠️ LiveKit CANNOT SEND AUDIO: pcm_bytes is empty", flush=True)
              return
         
+        # Reset interrupted flag when starting new audio
+        self._interrupted = False
+        
         sr = sample_rate or self.sample_rate
         ch = channels or self.channels
         samples_per_channel = int(sr * 0.02)  # 20ms frames
@@ -197,6 +207,9 @@ class LiveKitRoomSession:
 
         def _queue_frames():
             for i in range(0, len(padded), frame_bytes):
+                # Check interrupt flag in frame generation
+                if self._interrupted:
+                    break
                 chunk = padded[i:i + frame_bytes]
                 frame = rtc.AudioFrame(chunk, sr, ch, samples_per_channel)
                 yield frame
@@ -241,8 +254,15 @@ class LiveKitRoomSession:
     
                     frame_idx = 0
                     start_time = time.time()
+                    interrupted = False
                     for frame in _queue_frames():
                         if self._closed: break
+                        
+                        # Check if interrupted by user
+                        if self._interrupted:
+                            print(f"🛑 LiveKit audio interrupted after {frame_idx} frames", flush=True)
+                            interrupted = True
+                            break
                         
                         # Check if audio_source is still valid
                         if not self.audio_source:
@@ -258,7 +278,8 @@ class LiveKitRoomSession:
                         if expected > elapsed:
                             await asyncio.sleep(expected - elapsed)
                             
-                    print(f"✅ LiveKit sent {frame_idx} audio frames (closed={self._closed})", flush=True)
+                    if not interrupted:
+                        print(f"✅ LiveKit sent {frame_idx} audio frames (closed={self._closed})", flush=True)
                 except Exception as e:
                     print(f"⚠️ LiveKit capture_frame error: {e}", flush=True)
                 finally:

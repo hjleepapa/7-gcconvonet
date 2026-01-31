@@ -452,15 +452,26 @@ LiveKit SFU → Browser playback
             box.scrollTop = box.scrollHeight;
         }
 
+        let audioInterruptedAt = 0;  // Track when audio was interrupted
+        
         function stopAllPlayback() {
             setAssistantSpeaking(false, 'stopAllPlayback');
+            audioInterruptedAt = Date.now();
+            
+            // Signal server to stop sending audio
+            if (socket && socket.connected) {
+                socket.emit('stop_audio');
+                console.log('🛑 Emitted stop_audio to server');
+            }
+            
+            // Mute LiveKit audio instead of pausing - this allows the stream to continue
+            // so when we unmute, we hear current audio not old buffered audio
             livekitAudioElements.forEach((element, sid) => {
                 try {
-                    element.pause();
-                    element.currentTime = 0;
-                    console.log(`⏸️ Paused LiveKit audio element: ${sid}`);
+                    element.muted = true;
+                    console.log(`🔇 Muted LiveKit audio element: ${sid}`);
                 } catch (e) {
-                    console.warn('⚠️ Error stopping LiveKit audio element:', e);
+                    console.warn('⚠️ Error muting LiveKit audio element:', e);
                 }
             });
             if (fallbackAudio) {
@@ -475,18 +486,38 @@ LiveKit SFU → Browser playback
 
         function resumeLiveKitPlayback() {
             if (!LIVEKIT_ENABLED) return;
-            livekitAudioElements.forEach((element, sid) => {
-                try {
-                    if (element.paused) {
-                        console.log(`▶️ Resuming LiveKit audio element: ${sid}`);
-                        element.play().catch(err => {
-                            console.warn(`⚠️ Failed to resume playback for ${sid}:`, err);
-                        });
+            
+            // Add a delay after interrupt to let old audio drain
+            const timeSinceInterrupt = Date.now() - audioInterruptedAt;
+            const minDelay = 300; // 300ms delay after interrupt
+            
+            const doResume = () => {
+                livekitAudioElements.forEach((element, sid) => {
+                    try {
+                        // Unmute if muted
+                        if (element.muted) {
+                            element.muted = false;
+                            console.log(`🔊 Unmuted LiveKit audio element: ${sid}`);
+                        }
+                        // Also ensure it's playing
+                        if (element.paused) {
+                            console.log(`▶️ Resuming LiveKit audio element: ${sid}`);
+                            element.play().catch(err => {
+                                console.warn(`⚠️ Failed to resume playback for ${sid}:`, err);
+                            });
+                        }
+                    } catch (e) {
+                        console.warn('⚠️ Error resuming LiveKit audio element:', e);
                     }
-                } catch (e) {
-                    console.warn('⚠️ Error resuming LiveKit audio element:', e);
-                }
-            });
+                });
+            };
+            
+            // If recently interrupted, delay the resume
+            if (audioInterruptedAt > 0 && timeSinceInterrupt < minDelay) {
+                setTimeout(doResume, minDelay - timeSinceInterrupt);
+            } else {
+                doResume();
+            }
         }
 
         function playAudioResponse(base64Audio) {
@@ -869,7 +900,7 @@ LiveKit SFU → Browser playback
                     // Update assistantSpeaking state so VAD knows to use higher threshold
                     setAssistantSpeaking(true, 'agent_stream_chunk');
                     assistantStartedSpeakingAt = Date.now();
-                    // Ensure LiveKit audio element is playing (it might have been paused by VAD)
+                    // Resume playback - now uses muting approach which skips old buffered audio
                     resumeLiveKitPlayback();
                     // Append to the current streaming message if exists, or create new
                     addStreamingTranscript('agent', data.text);
@@ -882,7 +913,7 @@ LiveKit SFU → Browser playback
                     // Final response received - replace any streaming text with the final text
                     // or just ensure the final text is displayed
                     addTranscript('agent', data.text, true); // true = overwrite streaming
-                    // Ensure playback is resumed for the final response too
+                    // Resume playback for the final response too
                     resumeLiveKitPlayback();
                     setAssistantSpeaking(true, 'agent_response');
                     assistantStartedSpeakingAt = Date.now();
