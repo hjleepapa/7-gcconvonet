@@ -70,6 +70,12 @@ class AgentMonitor:
     def __init__(self):
         self.redis = get_redis_manager()
         self.max_interactions = 1000  # Keep last 1000 interactions
+        
+        # Check Redis availability
+        if self.redis and self.redis.redis_client:
+            print(f"✅ AgentMonitor: Redis connection available", flush=True)
+        else:
+            print(f"⚠️ AgentMonitor: Redis connection NOT available", flush=True)
     
     def track_interaction(
         self,
@@ -87,6 +93,7 @@ class AgentMonitor:
         metadata: Dict[str, Any] = None
     ) -> bool:
         """Track an agent interaction"""
+        print(f"📊 AgentMonitor: Tracking interaction {request_id} for provider={provider}, user={user_id}", flush=True)
         try:
             interaction = AgentInteraction(
                 request_id=request_id,
@@ -128,9 +135,10 @@ class AgentMonitor:
                 self.redis.redis_client.ltrim(user_key, 0, 100 - 1)  # Keep last 100 per user
                 self.redis.redis_client.expire(user_key, 86400 * 7)
             
+            print(f"✅ AgentMonitor: Successfully tracked interaction {request_id}", flush=True)
             return True
         except Exception as e:
-            print(f"❌ Error tracking agent interaction: {e}")
+            print(f"❌ AgentMonitor: Error tracking agent interaction: {e}", flush=True)
             import traceback
             traceback.print_exc()
             return False
@@ -159,6 +167,7 @@ class AgentMonitor:
         try:
             recent_key = "agent_interactions:recent"
             request_ids = self.redis.redis_client.lrange(recent_key, 0, limit - 1)
+            print(f"📊 AgentMonitor: Found {len(request_ids) if request_ids else 0} recent interaction IDs", flush=True)
             
             interactions = []
             for req_id in request_ids:
@@ -168,9 +177,12 @@ class AgentMonitor:
                 if interaction:
                     interactions.append(interaction)
             
+            print(f"📊 AgentMonitor: Retrieved {len(interactions)} interactions", flush=True)
             return interactions
         except Exception as e:
-            print(f"❌ Error getting recent interactions: {e}")
+            print(f"❌ AgentMonitor: Error getting recent interactions: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
             return []
     
     def get_interactions_by_provider(self, provider: str, limit: int = 50) -> List[AgentInteraction]:
