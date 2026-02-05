@@ -95,6 +95,7 @@ class AgentMonitor:
         """Track an agent interaction"""
         print(f"📊 AgentMonitor: Tracking interaction {request_id} for provider={provider}, user={user_id}", flush=True)
         try:
+            print(f"📊 AgentMonitor: Creating interaction object...", flush=True)
             interaction = AgentInteraction(
                 request_id=request_id,
                 user_id=user_id,
@@ -111,9 +112,12 @@ class AgentMonitor:
             )
             
             # Store in Redis
+            print(f"📊 AgentMonitor: Serializing to Redis...", flush=True)
             interaction_key = f"agent_interaction:{request_id}"
             interaction_data = json.dumps(interaction.to_dict())
+            print(f"📊 AgentMonitor: Data size: {len(interaction_data)} bytes", flush=True)
             self.redis.set(interaction_key, interaction_data, expire=86400 * 7)  # 7 days
+            print(f"📊 AgentMonitor: Stored in Redis", flush=True)
             
             # Add to recent interactions list
             recent_key = "agent_interactions:recent"

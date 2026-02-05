@@ -1086,6 +1086,7 @@ LiveKit SFU → Browser playback
             const silentUI = options.silentUI || false;
             isRecording = false;
             isProcessing = true;
+            processingStartedAt = Date.now();  // Track when processing started
             const button = document.getElementById('micButton');
             const icon = document.getElementById('micIcon');
             const label = document.getElementById('micLabel');
@@ -1229,8 +1230,22 @@ LiveKit SFU → Browser playback
             }
         }
 
+        let processingStartedAt = 0;  // Track when processing started
+        
         function toggleRecording() {
-            if (isProcessing) return;
+            // If processing, allow user to force reset after 5 seconds
+            if (isProcessing) {
+                const processingDuration = Date.now() - processingStartedAt;
+                if (processingDuration > 5000) {
+                    console.log('⚠️ Processing took too long, forcing reset');
+                    showStatus('Resetting... Please try again.', 'warning');
+                    resetMicButton();
+                    return;
+                }
+                // Still processing, don't allow click
+                console.log('⏳ Still processing, please wait...');
+                return;
+            }
             if (!isRecording) {
                 startRecording();
             } else {

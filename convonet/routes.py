@@ -2342,6 +2342,8 @@ VOICE OUTPUT FORMAT (CRITICAL):
             duration_ms = (time_module.time() - process_start_time) * 1000
             
             # Track the interaction with agent_type for filtering
+            print(f"📊 About to track interaction...", flush=True)
+            sys.stdout.flush()
             monitor.track_interaction(
                 request_id=request_id,
                 user_id=user_id,
@@ -2355,6 +2357,8 @@ VOICE OUTPUT FORMAT (CRITICAL):
                 duration_ms=duration_ms,
                 metadata={"agent_type": agent_type}
             )
+            print(f"✅ Interaction tracked, about to return response", flush=True)
+            sys.stdout.flush()
             
             # Cleanup: Clear large objects to help with memory management
             # Note: tool_calls_info is used by monitor, so don't clear it yet
