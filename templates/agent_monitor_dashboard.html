@@ -358,12 +358,24 @@
         <div class="interactions-list">
             <div class="interactions-header">
                 <h2>Recent Interactions</h2>
-                <div style="display: flex; gap: 10px; align-items: center;">
-                    <div class="filter-buttons">
-                        <button class="filter-btn active" onclick="filterInteractions('all')">All</button>
-                        <button class="filter-btn" onclick="filterInteractions('claude')">Claude</button>
-                        <button class="filter-btn" onclick="filterInteractions('gemini')">Gemini</button>
-                        <button class="filter-btn" onclick="filterInteractions('openai')">OpenAI</button>
+                <div style="display: flex; gap: 20px; align-items: center; flex-wrap: wrap;">
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <span style="color: #666; font-size: 14px;">Provider:</span>
+                        <div class="filter-buttons" id="providerFilters">
+                            <button class="filter-btn active" onclick="filterByProvider('all')">All</button>
+                            <button class="filter-btn" onclick="filterByProvider('claude')">🤖 Claude</button>
+                            <button class="filter-btn" onclick="filterByProvider('gemini')">✨ Gemini</button>
+                            <button class="filter-btn" onclick="filterByProvider('openai')">⚡ OpenAI</button>
+                        </div>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <span style="color: #666; font-size: 14px;">Domain:</span>
+                        <div class="filter-buttons" id="domainFilters">
+                            <button class="filter-btn active" onclick="filterByDomain('all')">All</button>
+                            <button class="filter-btn" onclick="filterByDomain('todo')" style="border-color: #10b981;">📝 Productivity</button>
+                            <button class="filter-btn" onclick="filterByDomain('mortgage')" style="border-color: #f59e0b;">🏠 Mortgage</button>
+                            <button class="filter-btn" onclick="filterByDomain('healthcare')" style="border-color: #ef4444;">🏥 Healthcare</button>
+                        </div>
                     </div>
                     <button class="refresh-btn" onclick="loadInteractions()">🔄 Refresh</button>
                 </div>
@@ -374,7 +386,8 @@
     
     <script>
         let providerChart = null;
-        let currentFilter = 'all';
+        let currentProviderFilter = 'all';
+        let currentDomainFilter = 'all';
         let selectedInteractionId = null;
         
         // Load data on page load
@@ -448,9 +461,13 @@
         
         async function loadInteractions() {
             try {
-                const url = currentFilter === 'all' 
-                    ? '/agent-monitor/api/interactions?limit=50'
-                    : `/agent-monitor/api/interactions?limit=50&provider=${currentFilter}`;
+                let url = '/agent-monitor/api/interactions?limit=50';
+                if (currentProviderFilter !== 'all') {
+                    url += `&provider=${currentProviderFilter}`;
+                }
+                if (currentDomainFilter !== 'all') {
+                    url += `&agent_type=${currentDomainFilter}`;
+                }
                 
                 const response = await fetch(url);
                 const data = await response.json();
@@ -476,10 +493,19 @@
                 return;
             }
             
+            // Domain badge styles
+            const domainStyles = {
+                'todo': { icon: '📝', color: '#10b981', label: 'Productivity' },
+                'mortgage': { icon: '🏠', color: '#f59e0b', label: 'Mortgage' },
+                'healthcare': { icon: '🏥', color: '#ef4444', label: 'Healthcare' }
+            };
+            
             container.innerHTML = interactions.map(interaction => {
                 const toolCallsCount = interaction.tool_calls ? interaction.tool_calls.length : 0;
                 const provider = interaction.provider || 'unknown';
                 const status = interaction.status || 'success';
+                const agentType = interaction.metadata?.agent_type || 'todo';
+                const domainStyle = domainStyles[agentType] || domainStyles['todo'];
                 
                 return `
                     <div class="interaction-item" onclick="toggleInteractionDetails('${interaction.request_id}')">
@@ -489,6 +515,7 @@
                                 <div class="interaction-time">${new Date(interaction.datetime).toLocaleString()}</div>
                             </div>
                             <div class="interaction-meta">
+                                <span class="meta-badge" style="background: ${domainStyle.color}20; color: ${domainStyle.color}; border: 1px solid ${domainStyle.color}40;">${domainStyle.icon} ${domainStyle.label}</span>
                                 <span class="meta-badge provider-${provider}">${provider.toUpperCase()}</span>
                                 <span class="meta-badge status-${status}">${status.toUpperCase()}</span>
                                 ${interaction.model ? `<span class="meta-badge">${interaction.model}</span>` : ''}
@@ -535,16 +562,33 @@
             }
         }
         
-        function filterInteractions(provider) {
-            currentFilter = provider;
+        function filterByProvider(provider) {
+            currentProviderFilter = provider;
             
-            // Update button states
-            document.querySelectorAll('.filter-btn').forEach(btn => {
+            // Update button states for provider filters only
+            document.querySelectorAll('#providerFilters .filter-btn').forEach(btn => {
                 btn.classList.remove('active');
             });
             event.target.classList.add('active');
             
             loadInteractions();
+        }
+        
+        function filterByDomain(domain) {
+            currentDomainFilter = domain;
+            
+            // Update button states for domain filters only
+            document.querySelectorAll('#domainFilters .filter-btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            event.target.classList.add('active');
+            
+            loadInteractions();
+        }
+        
+        // Legacy function for backwards compatibility
+        function filterInteractions(provider) {
+            filterByProvider(provider);
         }
         
         function escapeHtml(text) {

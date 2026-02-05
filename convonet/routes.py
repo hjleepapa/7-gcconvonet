@@ -2341,7 +2341,7 @@ VOICE OUTPUT FORMAT (CRITICAL):
             # Use time_module to avoid scoping conflicts
             duration_ms = (time_module.time() - process_start_time) * 1000
             
-            # Track the interaction
+            # Track the interaction with agent_type for filtering
             monitor.track_interaction(
                 request_id=request_id,
                 user_id=user_id,
@@ -2352,7 +2352,8 @@ VOICE OUTPUT FORMAT (CRITICAL):
                 agent_response=final_response if isinstance(final_response, str) else str(final_response),
                 tool_calls=tool_calls_info,
                 status=AgentInteractionStatus.SUCCESS,
-                duration_ms=duration_ms
+                duration_ms=duration_ms,
+                metadata={"agent_type": agent_type}
             )
             
             # Cleanup: Clear large objects to help with memory management
@@ -2403,7 +2404,8 @@ VOICE OUTPUT FORMAT (CRITICAL):
             tool_calls=[],
             status=AgentInteractionStatus.TIMEOUT,
             duration_ms=duration_ms,
-            error=f"Agent execution timed out after {timeout_seconds} seconds (provider: {current_provider})"
+            error=f"Agent execution timed out after {timeout_seconds} seconds (provider: {current_provider})",
+            metadata={"agent_type": agent_type}
         )
         # Return a special marker for timeout
         return "AGENT_TIMEOUT: Taking too long to process. Please try a simpler request."
@@ -2428,7 +2430,8 @@ VOICE OUTPUT FORMAT (CRITICAL):
             tool_calls=[],
             status=AgentInteractionStatus.FAILED,
             duration_ms=duration_ms,
-            error=error_str
+            error=error_str,
+            metadata={"agent_type": agent_type}
         )
         
         # Check if it's a model 404 error - if so, clear cache and retry once

@@ -25,6 +25,7 @@ def get_interactions():
     try:
         limit = int(request.args.get('limit', 50))
         provider = request.args.get('provider')
+        agent_type = request.args.get('agent_type')  # Filter by domain: todo, mortgage, healthcare
         
         monitor = get_agent_monitor()
         
@@ -35,6 +36,13 @@ def get_interactions():
         
         # Convert to dict format
         interactions_data = [interaction.to_dict() for interaction in interactions]
+        
+        # Filter by agent_type if specified
+        if agent_type:
+            interactions_data = [
+                i for i in interactions_data 
+                if i.get('metadata', {}).get('agent_type') == agent_type
+            ]
         
         return jsonify({
             "success": True,
