@@ -91,6 +91,8 @@ def seed_test_data(identifier: str = None):
             member_id = str(uuid4())
             member_number = f"MBR{random.randint(100000, 999999)}"
             
+            # Use current year for coverage dates
+            current_year = datetime.now().year
             db.execute(text("""
                 INSERT INTO healthcare_members (
                     id, user_id, member_number, group_number, plan_id, plan_name,
@@ -98,36 +100,40 @@ def seed_test_data(identifier: str = None):
                     date_of_birth, relationship_to_subscriber
                 ) VALUES (
                     :id, :user_id, :member_number, 'GRP-CONVONET-001', :plan_id,
-                    'Convonet Gold PPO', 'active', '2025-01-01', '2025-12-31',
+                    'Convonet Gold PPO', 'active', :start_date, :end_date,
                     '1985-06-15', 'self'
                 )
             """), {
                 "id": member_id,
                 "user_id": user_id,
                 "member_number": member_number,
-                "plan_id": plan_id
+                "plan_id": plan_id,
+                "start_date": f"{current_year}-01-01",
+                "end_date": f"{current_year}-12-31"
             })
             print(f"✅ Created member: {member_number}")
         
-        # Create accumulations
+        # Create accumulations (use current year)
+        current_year = datetime.now().year
         db.execute(text("""
             INSERT INTO member_accumulations (
                 id, member_id, plan_year,
                 individual_deductible_met_in_network,
                 individual_oop_met_in_network
             ) VALUES (
-                :id, :member_id, 2025, 750.00, 1250.00
+                :id, :member_id, :plan_year, 750.00, 1250.00
             ) ON CONFLICT (member_id, plan_year) DO UPDATE SET
                 individual_deductible_met_in_network = 750.00,
                 individual_oop_met_in_network = 1250.00
-        """), {"id": str(uuid4()), "member_id": member_id})
-        print("✅ Created accumulations ($750 deductible met, $1250 OOP met)")
+        """), {"id": str(uuid4()), "member_id": member_id, "plan_year": current_year})
+        print(f"✅ Created accumulations ($750 deductible met, $1250 OOP met) for {current_year}")
         
-        # Create claims
+        # Create claims (use current year)
+        current_year = datetime.now().year
         claims_data = [
             {
-                "claim_number": "CLM202501150001",
-                "service_date": "2025-01-15",
+                "claim_number": f"CLM{current_year}01150001",
+                "service_date": f"{current_year}-01-15",
                 "provider_name": "Dr. Sarah Johnson",
                 "provider_npi": "1234567890",
                 "billed": 150.00,
@@ -139,8 +145,8 @@ def seed_test_data(identifier: str = None):
                 "desc": "Office visit - Paid"
             },
             {
-                "claim_number": "CLM202501200002",
-                "service_date": "2025-01-20",
+                "claim_number": f"CLM{current_year}01200002",
+                "service_date": f"{current_year}-01-20",
                 "provider_name": "Bay Area Imaging",
                 "provider_npi": "2345678901",
                 "billed": 2500.00,
@@ -154,8 +160,8 @@ def seed_test_data(identifier: str = None):
                 "desc": "MRI - Denied (no prior auth)"
             },
             {
-                "claim_number": "CLM202501220003",
-                "service_date": "2025-01-22",
+                "claim_number": f"CLM{current_year}01220003",
+                "service_date": f"{current_year}-01-22",
                 "provider_name": "Dr. Michael Chen",
                 "provider_npi": "2345678901",
                 "billed": 250.00,
@@ -163,8 +169,8 @@ def seed_test_data(identifier: str = None):
                 "desc": "Specialist visit - Processing"
             },
             {
-                "claim_number": "CLM202501100004",
-                "service_date": "2025-01-10",
+                "claim_number": f"CLM{current_year}01100004",
+                "service_date": f"{current_year}-01-10",
                 "provider_name": "Quest Diagnostics",
                 "provider_npi": "3456789012",
                 "billed": 450.00,
@@ -219,10 +225,10 @@ def seed_test_data(identifier: str = None):
             except Exception as e:
                 print(f"⚠️  Claim {claim['claim_number']}: {e}")
         
-        # Create prior authorizations
+        # Create prior authorizations (use current year)
         auths_data = [
             {
-                "auth_number": "AUTH202501150001",
+                "auth_number": f"AUTH{current_year}01150001",
                 "procedure_code": "97110",
                 "procedure_desc": "Physical Therapy - Therapeutic Exercises",
                 "provider_name": "Bay Area Physical Therapy",
@@ -231,7 +237,7 @@ def seed_test_data(identifier: str = None):
                 "desc": "PT - Approved (12 sessions)"
             },
             {
-                "auth_number": "AUTH202501250002",
+                "auth_number": f"AUTH{current_year}01250002",
                 "procedure_code": "27447",
                 "procedure_desc": "Total Knee Replacement",
                 "provider_name": "Dr. David Martinez",
@@ -263,7 +269,7 @@ def seed_test_data(identifier: str = None):
                     "provider_name": auth["provider_name"],
                     "status": auth["status"],
                     "approved_units": auth.get("approved_units"),
-                    "requested_date": "2025-01-15"
+                    "requested_date": f"{current_year}-01-15"
                 })
                 print(f"✅ Created prior auth: {auth['desc']}")
             except Exception as e:
