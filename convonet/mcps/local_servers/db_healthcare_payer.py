@@ -241,10 +241,21 @@ def search_claims(
     _lazy_import_healthcare_models()
     db = SessionLocal()
     try:
+        logger.info(f"🔍 search_claims called with member_id={member_id}")
+        
         member = _get_member_by_user_id(db, member_id)
         
         if not member:
+            logger.warning(f"⚠️ Member not found for user_id={member_id}")
             return {"success": False, "error": "Member not found"}
+        
+        logger.info(f"✅ Found member: id={member.id}, member_number={member.member_number}")
+        
+        # Debug: Check total claims for this member
+        total_claims = db.query(HealthcareClaim).filter(
+            HealthcareClaim.member_id == member.id
+        ).count()
+        logger.info(f"📊 Total claims for member {member.id}: {total_claims}")
         
         query = db.query(HealthcareClaim).filter(
             HealthcareClaim.member_id == member.id
@@ -278,6 +289,15 @@ def search_claims(
         claims = query.limit(limit).all()
         
         if not claims:
+            # Debug: Check if there are any claims at all in the database
+            all_claims_count = db.query(HealthcareClaim).count()
+            logger.info(f"📊 Total claims in database: {all_claims_count}")
+            
+            # Check claims with different member_ids
+            if all_claims_count > 0:
+                sample_claim = db.query(HealthcareClaim).first()
+                logger.info(f"📋 Sample claim member_id: {sample_claim.member_id}")
+            
             return {
                 "success": True,
                 "claims": [],
