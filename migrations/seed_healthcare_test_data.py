@@ -15,12 +15,15 @@ import random
 
 load_dotenv()
 
-def seed_test_data(user_id: str = None):
+def seed_test_data(identifier: str = None):
     """
     Seed test healthcare data for a specific user.
     
     Args:
-        user_id: UUID of user to create member for. If None, uses first user in DB.
+        identifier: Can be either:
+            - voice_pin (e.g., "1240") - will look up UUID from users_anthropic
+            - UUID (e.g., "2893e279-2242-4b65-97b4-c76caa617de5")
+            - None - uses first user in DB
     """
     db_uri = os.getenv("DB_URI")
     if not db_uri:
@@ -33,17 +36,38 @@ def seed_test_data(user_id: str = None):
     db = Session()
     
     try:
-        # Get user_id if not provided
-        if not user_id:
+        user_id = None
+        
+        # Get user_id based on identifier type
+        if not identifier:
+            # No identifier provided - use first user
             result = db.execute(text("SELECT id FROM users_anthropic LIMIT 1"))
             row = result.fetchone()
             if not row:
                 print("❌ No users found in users_anthropic table")
-                print("   Please create a user first or provide a user_id")
+                print("   Please create a user first or provide a voice_pin or user_id")
                 return
             user_id = str(row[0])
+            print(f"📝 Using first user in database")
+        elif identifier.isdigit() or (len(identifier) <= 6 and identifier.replace('-', '').isdigit()):
+            # Looks like a voice_pin (numeric, short)
+            print(f"📝 Looking up user by voice_pin: {identifier}")
+            result = db.execute(text(
+                "SELECT id FROM users_anthropic WHERE voice_pin = :voice_pin"
+            ), {"voice_pin": identifier})
+            row = result.fetchone()
+            if not row:
+                print(f"❌ No user found with voice_pin: {identifier}")
+                print("   Please check the voice_pin in users_anthropic table")
+                return
+            user_id = str(row[0])
+            print(f"✅ Found user UUID: {user_id}")
+        else:
+            # Assume it's a UUID
+            user_id = identifier
+            print(f"📝 Using provided UUID: {user_id}")
         
-        print(f"📝 Using user_id: {user_id}")
+        print(f"📝 Final user_id: {user_id}")
         
         # Get plan
         result = db.execute(text("SELECT id FROM healthcare_plans WHERE plan_code = 'PPO-GOLD-2025'"))
@@ -272,6 +296,10 @@ def seed_test_data(user_id: str = None):
 
 
 if __name__ == "__main__":
-    # Optionally pass user_id as command line argument
-    user_id = sys.argv[1] if len(sys.argv) > 1 else None
-    seed_test_data(user_id)
+    # Optionally pass voice_pin or user_id as command line argument
+    # Examples:
+    #   python seed_healthcare_test_data.py 1240          # voice_pin
+    #   python seed_healthcare_test_data.py 2893e279-... # UUID
+    #   python seed_healthcare_test_data.py              # uses first user
+    identifier = sys.argv[1] if len(sys.argv) > 1 else None
+    seed_test_data(identifier)
