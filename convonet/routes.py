@@ -19,8 +19,9 @@ except ImportError:
 
 from twilio.twiml.voice_response import VoiceResponse, Connect, Gather
 from .state import AgentState
-from .assistant_graph_todo import get_agent, TodoAgent, MortgageAgent, get_mortgage_agent
+from .assistant_graph_todo import get_agent, TodoAgent, MortgageAgent, get_mortgage_agent, HealthcareAgent, get_healthcare_agent
 from .mortgage_intent_detection import detect_mortgage_intent
+from .healthcare_intent_detection import detect_healthcare_intent
 from .voice_intent_utils import has_transfer_intent
 from .llm_provider_manager import get_llm_provider_manager, LLMProvider
 from langchain_mcp_adapters.client import MultiServerMCPClient
@@ -1069,7 +1070,7 @@ def preload_mcp_tools_sync():
 async def _get_agent_graph(
     provider: Optional[LLMProvider] = None, 
     user_id: Optional[str] = None,
-    agent_type: str = "todo",  # "todo" or "mortgage"
+    agent_type: str = "todo",  # "todo", "mortgage", or "healthcare"
     model: Optional[str] = None  # Optional model override (e.g., "claude-3-5-haiku-20241022" for voice)
 ) -> StateGraph:
     """Helper to initialize the agent graph with tools (cached for performance).
@@ -1369,20 +1370,56 @@ async def _get_agent_graph(
                     tools = limited_tools
             
             # Filter tools based on agent type
+            mortgage_tool_names = [
+                "create_mortgage_application",
+                "get_mortgage_application_status",
+                "update_mortgage_financial_info",
+                "calculate_dti_ratio",
+                "add_mortgage_debt",
+                "get_mortgage_debts",
+                "upload_mortgage_document",
+                "get_mortgage_documents",
+                "get_required_documents",
+                "get_missing_documents"
+            ]
+            
+            healthcare_tool_names = [
+                "check_eligibility",
+                "get_coverage_dates",
+                "search_claims",
+                "get_claim_status",
+                "get_claim_details",
+                "file_claim_appeal",
+                "get_eob",
+                "get_benefits_summary",
+                "check_benefit_coverage",
+                "get_deductible_status",
+                "get_out_of_pocket_status",
+                "get_copay_info",
+                "check_prior_auth_required",
+                "submit_prior_auth",
+                "get_prior_auth_status",
+                "list_prior_auths",
+                "search_providers",
+                "check_provider_network",
+                "get_provider_details",
+                "get_care_programs",
+                "enroll_care_program",
+                "get_preventive_care"
+            ]
+            
+            # Helper function to get tool name
+            def _get_tool_name(t):
+                if hasattr(t, 'name'):
+                    return t.name
+                elif hasattr(t, 'func') and hasattr(t.func, '__name__'):
+                    return t.func.__name__
+                elif hasattr(t, '__name__'):
+                    return t.__name__
+                return None
+            
             if agent_type == "mortgage":
                 # Filter to only mortgage-related tools
-                mortgage_tool_names = [
-                    "create_mortgage_application",
-                    "get_mortgage_application_status",
-                    "update_mortgage_financial_info",
-                    "calculate_dti_ratio",
-                    "add_mortgage_debt",
-                    "get_mortgage_debts",
-                    "upload_mortgage_document",
-                    "get_mortgage_documents",
-                    "get_required_documents",
-                    "get_missing_documents"
-                ]
                 # Debug: Check tool attributes
                 if tools and len(tools) > 0:
                     sample_tool = tools[0]
@@ -1390,44 +1427,43 @@ async def _get_agent_graph(
                     print(f"🔍 Sample tool attributes: {[attr for attr in dir(sample_tool) if not attr.startswith('_')][:10]}", flush=True)
                     if hasattr(sample_tool, 'name'):
                         print(f"🔍 Sample tool name: {sample_tool.name}", flush=True)
-                    # Try alternative attribute names
-                    if hasattr(sample_tool, 'func') and hasattr(sample_tool.func, '__name__'):
-                        print(f"🔍 Sample tool func name: {sample_tool.func.__name__}", flush=True)
                 
-                # Try multiple ways to get tool name
+                # Filter to mortgage tools
                 filtered_tools = []
                 for t in tools:
-                    tool_name = None
-                    if hasattr(t, 'name'):
-                        tool_name = t.name
-                    elif hasattr(t, 'func') and hasattr(t.func, '__name__'):
-                        tool_name = t.func.__name__
-                    elif hasattr(t, '__name__'):
-                        tool_name = t.__name__
-                    
+                    tool_name = _get_tool_name(t)
                     if tool_name and tool_name in mortgage_tool_names:
                         filtered_tools.append(t)
                         print(f"✅ Found mortgage tool: {tool_name}", flush=True)
                 
                 tools = filtered_tools
                 print(f"🏠 Filtered to {len(tools)} mortgage tools (from {len(_mcp_tools_cache) if _mcp_tools_cache else 0} total tools)", flush=True)
-            else:
-                # Filter to exclude mortgage tools (keep todo/team/calendar/transfer tools)
-                mortgage_tool_names = [
-                    "create_mortgage_application",
-                    "get_mortgage_application_status",
-                    "update_mortgage_financial_info",
-                    "calculate_dti_ratio",
-                    "add_mortgage_debt",
-                    "get_mortgage_debts",
-                    "upload_mortgage_document",
-                    "get_mortgage_documents",
-                    "get_required_documents",
-                    "get_missing_documents"
-                ]
-                filtered_tools = [t for t in tools if not (hasattr(t, 'name') and t.name in mortgage_tool_names)]
+            
+            elif agent_type == "healthcare":
+                # Filter to only healthcare-related tools
+                if tools and len(tools) > 0:
+                    sample_tool = tools[0]
+                    print(f"🔍 Sample tool type: {type(sample_tool)}", flush=True)
+                    if hasattr(sample_tool, 'name'):
+                        print(f"🔍 Sample tool name: {sample_tool.name}", flush=True)
+                
+                # Filter to healthcare tools
+                filtered_tools = []
+                for t in tools:
+                    tool_name = _get_tool_name(t)
+                    if tool_name and tool_name in healthcare_tool_names:
+                        filtered_tools.append(t)
+                        print(f"✅ Found healthcare tool: {tool_name}", flush=True)
+                
                 tools = filtered_tools
-                print(f"📝 Filtered to {len(tools)} todo/team tools (excluded mortgage tools)", flush=True)
+                print(f"🏥 Filtered to {len(tools)} healthcare tools (from {len(_mcp_tools_cache) if _mcp_tools_cache else 0} total tools)", flush=True)
+            
+            else:
+                # Filter to exclude domain-specific tools (keep todo/team/calendar/transfer tools)
+                all_domain_tools = mortgage_tool_names + healthcare_tool_names
+                filtered_tools = [t for t in tools if not (_get_tool_name(t) in all_domain_tools)]
+                tools = filtered_tools
+                print(f"📝 Filtered to {len(tools)} todo/team tools (excluded domain-specific tools)", flush=True)
             
             print(f"🔧 Building {agent_type} agent graph with {len(tools)} tools...", flush=True)
             sys.stdout.flush()
@@ -1438,7 +1474,7 @@ async def _get_agent_graph(
                 print(f"✅ Using {len(tools)} tools for agent graph (cached: {len(_mcp_tools_cache)} tools)", flush=True)
                 sys.stdout.flush()
             
-            agent_class_name = "MortgageAgent" if agent_type == "mortgage" else "TodoAgent"
+            agent_class_name = {"mortgage": "MortgageAgent", "healthcare": "HealthcareAgent"}.get(agent_type, "TodoAgent")
             print(f"⏱️ Starting {agent_class_name} initialization (this may take a few seconds)...", flush=True)
             sys.stdout.flush()
             
@@ -1464,6 +1500,8 @@ async def _get_agent_graph(
                     
                     if agent_type == "mortgage":
                         agent_result['agent'] = MortgageAgent(tools=tools, provider=provider, model=current_model)
+                    elif agent_type == "healthcare":
+                        agent_result['agent'] = HealthcareAgent(tools=tools, provider=provider, model=current_model)
                     else:
                         agent_result['agent'] = TodoAgent(tools=tools, provider=provider, model=current_model)
                     
@@ -1522,6 +1560,8 @@ async def _get_agent_graph(
             try:
                 if agent_type == "mortgage":
                     fallback_agent = MortgageAgent(tools=[], provider=provider)
+                elif agent_type == "healthcare":
+                    fallback_agent = HealthcareAgent(tools=[], provider=provider)
                 else:
                     fallback_agent = TodoAgent(tools=[], provider=provider)
                 _agent_graph_cache = fallback_agent.build_graph()
@@ -1630,12 +1670,13 @@ async def _run_agent_async(
             return None
         return tool_id or str(uuid.uuid4()), tool_name or "unknown", args or {}
     
-    # Detect mortgage intent from user prompt
+    # Detect domain intent from user prompt
     prompt_text = prompt.strip().lower() if prompt else ""
     has_mortgage_intent = detect_mortgage_intent(prompt)
+    has_healthcare_intent = detect_healthcare_intent(prompt)
     
-    # Sticky mortgage context (keeps user in mortgage flow after initial intent)
-    # Allow explicit todo intent to override sticky mortgage context.
+    # Sticky domain context (keeps user in flow after initial intent)
+    # Allow explicit todo intent to override sticky context.
     todo_keywords = [
         "todo", "reminder", "calendar", "meeting", "schedule",
         "task", "create a todo", "create a reminder", "create a meeting"
@@ -1650,30 +1691,45 @@ async def _run_agent_async(
         except Exception as e:
             print(f"⚠️ Error reading agent context from Redis: {e}", flush=True)
     
-    if stored_agent_type == "mortgage" and not has_todo_intent:
+    # Handle sticky context for mortgage
+    if stored_agent_type == "mortgage" and not has_todo_intent and not has_healthcare_intent:
         if not has_mortgage_intent:
             print(f"🏠 Using sticky mortgage context for user_id {user_id}", flush=True)
         has_mortgage_intent = True
-    elif has_todo_intent and stored_agent_type == "mortgage":
-        print(f"📝 Todo intent detected; clearing sticky mortgage context for user_id {user_id}", flush=True)
+    
+    # Handle sticky context for healthcare
+    if stored_agent_type == "healthcare" and not has_todo_intent and not has_mortgage_intent:
+        if not has_healthcare_intent:
+            print(f"🏥 Using sticky healthcare context for user_id {user_id}", flush=True)
+        has_healthcare_intent = True
+    
+    # Clear sticky context if todo intent detected
+    if has_todo_intent and stored_agent_type in ["mortgage", "healthcare"]:
+        print(f"📝 Todo intent detected; clearing sticky {stored_agent_type} context for user_id {user_id}", flush=True)
         if user_id and redis_manager.is_available():
             try:
                 redis_manager.redis_client.delete(f"agent_type:{user_id}")
             except Exception as e:
                 print(f"⚠️ Error clearing agent context from Redis: {e}", flush=True)
     
-    agent_type = "mortgage" if has_mortgage_intent else "todo"
-    if agent_type == "mortgage":
+    # Determine agent type (healthcare takes priority over mortgage if both detected)
+    if has_healthcare_intent:
+        agent_type = "healthcare"
+        print(f"🏥 Healthcare intent detected, using HealthcareAgent", flush=True)
+        print(f"🏥 Prompt was: '{prompt}'", flush=True)
+    elif has_mortgage_intent:
+        agent_type = "mortgage"
         print(f"🏠 Mortgage intent detected, using MortgageAgent", flush=True)
         print(f"🏠 Prompt was: '{prompt}'", flush=True)
     else:
+        agent_type = "todo"
         print(f"📝 Using TodoAgent (default)", flush=True)
         print(f"📝 Prompt was: '{prompt}'", flush=True)
 
-    # Persist agent context so short replies (e.g., "Monthly income is 5,000") stay in mortgage flow
-    if agent_type == "mortgage" and user_id and redis_manager.is_available():
+    # Persist agent context so short replies stay in domain flow (30 min TTL)
+    if agent_type in ["mortgage", "healthcare"] and user_id and redis_manager.is_available():
         try:
-            redis_manager.redis_client.setex(f"agent_type:{user_id}", 1800, "mortgage")  # 30 min TTL
+            redis_manager.redis_client.setex(f"agent_type:{user_id}", 1800, agent_type)
         except Exception as e:
             print(f"⚠️ Error storing agent context in Redis: {e}", flush=True)
     
@@ -1762,11 +1818,16 @@ async def _run_agent_async(
             return f"TRANSFER_INITIATED:{fallback_extension}|{fallback_department}|{reason}"
         return "I'm sorry, there's a temporary system issue. Please try again in a moment."
 
-    # For mortgage agent, inject authenticated_user_id into the prompt context
-    # so the LLM knows the actual UUID value to use
+    # For domain-specific agents, inject authenticated_user_id into the prompt context
+    # so the LLM knows the actual UUID value to use for tool calls
     if agent_type == "mortgage" and user_id:
-        # Add context about authenticated_user_id to the prompt
+        # Add context about authenticated_user_id for mortgage
         enhanced_prompt = f"""[SYSTEM CONTEXT: Your authenticated_user_id is {user_id}. Use this exact value for all mortgage tool calls that require user_id parameter. DO NOT ask the user for their user_id.]
+
+{prompt}"""
+    elif agent_type == "healthcare" and user_id:
+        # Add context about member_id for healthcare
+        enhanced_prompt = f"""[SYSTEM CONTEXT: Your authenticated member_id is {user_id}. Use this exact value for all healthcare tool calls that require member_id parameter. DO NOT ask the member for their member_id, policy number, or SSN. The member is already authenticated.]
 
 {prompt}"""
     else:

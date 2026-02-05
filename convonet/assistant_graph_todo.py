@@ -1249,6 +1249,67 @@ def get_mortgage_agent(tools: List[BaseTool] = [], provider: Optional[LLMProvide
     """
     return MortgageAgent(tools=tools, provider=provider, model=model)
 
+
+# Import healthcare prompt at runtime to avoid circular imports
+def _get_healthcare_prompt():
+    from .healthcare_payer_prompts import HEALTHCARE_PAYER_SYSTEM_PROMPT
+    return HEALTHCARE_PAYER_SYSTEM_PROMPT
+
+
+class HealthcareAgent(TodoAgent):
+    """
+    Healthcare Payer Agent - Specialized agent for healthcare member services.
+    Handles claims, eligibility, benefits, prior authorizations, and provider network.
+    Inherits from TodoAgent but uses healthcare-specific prompts and tools.
+    """
+    
+    def __init__(
+        self,
+        name: str = "Healthcare Member Services Assistant",
+        model: str = None,
+        provider: Optional[LLMProvider] = None,
+        tools: List[BaseTool] = [],
+        system_prompt: str = None,
+    ) -> None:
+        """
+        Initialize Healthcare Agent with healthcare-specific prompts.
+        
+        Args:
+            name: Agent name
+            model: LLM model name (optional)
+            provider: LLM provider (claude, gemini, openai)
+            tools: List of tools to bind (should include healthcare MCP tools)
+            system_prompt: System prompt (defaults to HEALTHCARE_PAYER_SYSTEM_PROMPT)
+        """
+        # Get healthcare prompt if not provided
+        if system_prompt is None:
+            system_prompt = _get_healthcare_prompt()
+        
+        # Call parent __init__ with healthcare-specific prompt
+        super().__init__(
+            name=name,
+            model=model,
+            provider=provider,
+            tools=tools,
+            system_prompt=system_prompt
+        )
+
+
+def get_healthcare_agent(tools: List[BaseTool] = [], provider: Optional[LLMProvider] = None, model: str = None) -> HealthcareAgent:
+    """
+    Get or create a HealthcareAgent instance.
+    
+    Args:
+        tools: List of tools to bind (should include healthcare MCP tools)
+        provider: LLM provider (claude, gemini, openai)
+        model: LLM model name (optional)
+        
+    Returns:
+        HealthcareAgent instance
+    """
+    return HealthcareAgent(tools=tools, provider=provider, model=model)
+
+
 # For backwards compatibility
 agent = None  # Will be initialized on first use
 
