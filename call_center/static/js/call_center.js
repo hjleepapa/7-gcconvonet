@@ -153,8 +153,7 @@ class CallCenterAgent {
         // Customer popup
         this.closeCustomerPopup.addEventListener('click', () => this.hideCustomerPopup());
         this.acceptCallFromPopup.addEventListener('click', () => {
-            this.hideCustomerPopup();
-            this.showCustomerInfoWindow(); // Open info window when accepting call
+            this.acceptCallFromPopup.disabled = true;
             this.answerCall();
         });
         
@@ -650,6 +649,7 @@ class CallCenterAgent {
         
         // Update UI
         this.showIncomingCall(callerName, callerNumber);
+        this.enableAnswerControls();
         
         // Show customer popup with call identifiers
         this.showCustomerPopup(customerId, callSid, callId);
@@ -802,6 +802,7 @@ class CallCenterAgent {
         
         // Update UI and allow manual answer
         this.showIncomingCall(callerName, callerNumber);
+        this.enableAnswerControls();
         
         // Play ringtone
         this.ringTone.play();
@@ -897,9 +898,18 @@ class CallCenterAgent {
         });
         
         this.showIncomingCall(callerName, callerNumber);
+        this.enableAnswerControls();
         this.showCustomerPopup(callerNumber, callSid, callId);
         this.ringTone.play();
         this.attachSessionEventHandlers(session, 'inbound');
+    }
+
+    enableAnswerControls() {
+        this.answerBtn.disabled = false;
+        if (this.acceptCallFromPopup) {
+            this.acceptCallFromPopup.disabled = false;
+        }
+        this.answerInProgress = false;
     }
 
     async answerCall() {
@@ -1253,6 +1263,9 @@ class CallCenterAgent {
     
     hideCustomerPopup() {
         this.customerPopup.classList.remove('active');
+        if (this.currentCall && this.currentCall.call_id) {
+            this.showCustomerInfoWindow();
+        }
     }
     
     showIncomingCall(callerName, callerNumber) {
@@ -1329,8 +1342,9 @@ class CallCenterAgent {
             </div>
         `;
         
-        // Open customer info window if not already open
-        if (!this.customerInfoWindow || !this.customerInfoWindow.classList.contains('active')) {
+        // Open customer info window if popup is closed
+        if ((!this.customerPopup || !this.customerPopup.classList.contains('active')) &&
+            (!this.customerInfoWindow || !this.customerInfoWindow.classList.contains('active'))) {
             this.showCustomerInfoWindow();
         }
     }
