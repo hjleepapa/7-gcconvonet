@@ -13,6 +13,7 @@ class CallCenterAgent {
         this.localStream = null;
         this.audioAccessDenied = false;
         this.answerInProgress = false;
+        this.customerInfoPinned = false;
         this.iceServers = [
             { urls: 'stun:136.115.41.45:3478' },
             {
@@ -154,6 +155,8 @@ class CallCenterAgent {
         this.closeCustomerPopup.addEventListener('click', () => this.hideCustomerPopup());
         this.acceptCallFromPopup.addEventListener('click', () => {
             this.acceptCallFromPopup.disabled = true;
+            this.customerInfoPinned = true;
+            this.showCustomerInfoWindow();
             this.answerCall();
         });
         
@@ -818,6 +821,9 @@ class CallCenterAgent {
             incomingIdentity: identity,
             activeIdentity: this.activeCallIdentity
         });
+        if (this.isSessionPending(this.currentSession)) {
+            this.enableAnswerControls();
+        }
         session.on('failed', () => console.log('Ignored parallel session failed', session.id));
         session.on('ended', () => console.log('Ignored parallel session ended', session.id));
     }
@@ -1342,9 +1348,8 @@ class CallCenterAgent {
             </div>
         `;
         
-        // Open customer info window if popup is closed
-        if ((!this.customerPopup || !this.customerPopup.classList.contains('active')) &&
-            (!this.customerInfoWindow || !this.customerInfoWindow.classList.contains('active'))) {
+        // Ensure history window is visible after accept unless user closed it
+        if (this.customerInfoPinned || (this.customerPopup && !this.customerPopup.classList.contains('active'))) {
             this.showCustomerInfoWindow();
         }
     }
@@ -1504,6 +1509,7 @@ class CallCenterAgent {
         if (this.customerInfoWindow) {
             this.customerInfoWindow.classList.remove('active');
         }
+        this.customerInfoPinned = false;
     }
     
     initModalDragAndResize() {
