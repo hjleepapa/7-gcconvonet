@@ -3529,10 +3529,10 @@ def init_socketio(socketio_instance: SocketIO, app):
                             if redis_manager.is_available():
                                 import json
                                 redis_key = f"pending_response:{user_id}"
-                                    try:
-                                        redis_manager.redis_client.setex(redis_key, 300, json.dumps(pending_response))  # 5 min TTL
-                                    except Exception as redis_error:
-                                        print(f"⚠️ Error storing pending response (session gone): {redis_error}", flush=True)
+                                try:
+                                    redis_manager.redis_client.setex(redis_key, 300, json.dumps(pending_response))  # 5 min TTL
+                                except Exception as redis_error:
+                                    print(f"⚠️ Error storing pending response (session gone): {redis_error}", flush=True)
                                 print(f"💾 Stored pending response for user_id {user_id} (will be sent on reconnect)", flush=True)
                                 sentry_capture_voice_event("pending_response_stored", session_id, user_id, details={"reason": "session_gone_during_tts"})
                             else:
