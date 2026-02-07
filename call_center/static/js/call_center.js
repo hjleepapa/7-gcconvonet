@@ -671,9 +671,25 @@ class CallCenterAgent {
         const getHeader = typeof request.getHeader === 'function'
             ? request.getHeader.bind(request)
             : () => null;
+        const getHeaderFallback = (headerName) => {
+            if (!request.headers) {
+                return null;
+            }
+            const key = headerName.toLowerCase();
+            const entries = request.headers[key];
+            if (!entries || !entries.length) {
+                return null;
+            }
+            const entry = entries[0];
+            if (typeof entry === 'string') {
+                return entry;
+            }
+            return entry.raw || entry.parsed || entry.value || null;
+        };
+        const twilioCallSid = getHeader('X-Twilio-CallSid') || getHeaderFallback('X-Twilio-CallSid');
         return {
             callId: request.call_id || request.callId || session.id,
-            twilioCallSid: getHeader('X-Twilio-CallSid'),
+            twilioCallSid: twilioCallSid,
             fromTag: request.from_tag || null
         };
     }
