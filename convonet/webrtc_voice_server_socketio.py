@@ -12,7 +12,7 @@ import time
 import re
 import threading
 import struct
-from typing import Optional
+from typing import Optional, Callable, Tuple
 from uuid import UUID
 from urllib.parse import quote
 from flask import Blueprint, render_template, request, jsonify, Response
