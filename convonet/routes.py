@@ -1847,7 +1847,8 @@ async def _run_agent_async(
     # Use module-level time import to avoid scoping issues
     import time as time_for_thread
     thread_suffix = f"-{int(time_for_thread.time())}" if reset_thread else ""
-    thread_id = f"user-{user_id}{thread_suffix}" if user_id else f"flask-thread-1{thread_suffix}"
+    thread_prefix = f"{agent_type}-" if agent_type else ""
+    thread_id = f"{thread_prefix}user-{user_id}{thread_suffix}" if user_id else f"{thread_prefix}flask-thread-1{thread_suffix}"
     config = {"configurable": {"thread_id": thread_id}}
     
     # Debug logging

@@ -668,10 +668,24 @@ def get_benefits_summary(member_id: str) -> Dict[str, Any]:
         if not plan:
             return {"success": False, "error": "No plan information found"}
         
-        # Get benefits
+        # Get benefits and de-duplicate by service category
         benefits = db.query(PlanBenefit).filter(
             PlanBenefit.plan_id == plan.id
         ).all()
+        
+        unique_services = []
+        seen_categories = set()
+        for benefit in benefits:
+            if benefit.service_category not in seen_categories:
+                unique_services.append({
+                    "service": benefit.service_category.value.replace("_", " ").title(),
+                    "is_covered": benefit.is_covered,
+                    "copay_in_network": float(benefit.copay_in_network) if benefit.copay_in_network else None,
+                    "coinsurance_in_network": float(benefit.coinsurance_in_network) if benefit.coinsurance_in_network else None,
+                    "requires_prior_auth": benefit.requires_prior_auth,
+                    "requires_referral": benefit.requires_referral
+                })
+                seen_categories.add(benefit.service_category)
         
         return {
             "success": True,
@@ -691,17 +705,7 @@ def get_benefits_summary(member_id: str) -> Dict[str, Any]:
                 "family_in_network": float(plan.family_oop_max_in_network) if plan.family_oop_max_in_network else None,
                 "family_out_of_network": float(plan.family_oop_max_out_of_network) if plan.family_oop_max_out_of_network else None
             },
-            "covered_services": [
-                {
-                    "service": benefit.service_category.value.replace("_", " ").title(),
-                    "is_covered": benefit.is_covered,
-                    "copay_in_network": float(benefit.copay_in_network) if benefit.copay_in_network else None,
-                    "coinsurance_in_network": float(benefit.coinsurance_in_network) if benefit.coinsurance_in_network else None,
-                    "requires_prior_auth": benefit.requires_prior_auth,
-                    "requires_referral": benefit.requires_referral
-                }
-                for benefit in benefits
-            ],
+            "covered_services": unique_services,
             "plan_features": {
                 "requires_referral": plan.requires_referral,
                 "has_pharmacy_benefit": plan.has_pharmacy_benefit,

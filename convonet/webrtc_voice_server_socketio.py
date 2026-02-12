@@ -909,7 +909,17 @@ def build_customer_profile_from_session(session_data: dict | None) -> dict | Non
         from convonet.assistant_graph_todo import get_agent
         from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
         
-        thread_id = f"user-{user_id}" if user_id else None
+        # Determine the correct thread ID prefix based on current agent context
+        agent_type = "todo"
+        if user_id and redis_manager.is_available():
+            try:
+                stored_type = redis_manager.redis_client.get(f"agent_type:{user_id}")
+                if stored_type:
+                    agent_type = stored_type.decode("utf-8") if isinstance(stored_type, bytes) else stored_type
+            except Exception:
+                pass
+        
+        thread_id = f"{agent_type}-user-{user_id}" if user_id else None
         if thread_id and not profile["conversation_history"]:
             agent = get_agent()  # Default to todo agent for history
             if agent and hasattr(agent, 'graph'):
