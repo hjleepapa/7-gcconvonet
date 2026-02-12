@@ -1803,6 +1803,11 @@ async def _run_agent_async(
         error_msg = "Agent initialization timed out. Please try again."
         # Track timeout
         duration_ms = (time.time() - start_time) * 1000
+        # Merge provided metadata with agent_type
+        track_metadata = {"agent_type": agent_type}
+        if metadata:
+            track_metadata.update(metadata)
+            
         monitor.track_interaction(
             request_id=request_id,
             user_id=user_id,
@@ -1814,7 +1819,8 @@ async def _run_agent_async(
             tool_calls=[],
             status=AgentInteractionStatus.TIMEOUT,
             duration_ms=duration_ms,
-            error="Agent graph initialization timeout"
+            error="Agent graph initialization timeout",
+            metadata=track_metadata
         )
         return error_msg
     except Exception as e:
@@ -2364,6 +2370,11 @@ VOICE OUTPUT FORMAT (CRITICAL):
             # Track the interaction with agent_type for filtering
             print(f"📊 About to track interaction...", flush=True)
             sys.stdout.flush()
+            # Merge provided metadata with agent_type
+            track_metadata = {"agent_type": agent_type}
+            if metadata:
+                track_metadata.update(metadata)
+                
             monitor.track_interaction(
                 request_id=request_id,
                 user_id=user_id,
@@ -2375,7 +2386,7 @@ VOICE OUTPUT FORMAT (CRITICAL):
                 tool_calls=tool_calls_info,
                 status=AgentInteractionStatus.SUCCESS,
                 duration_ms=duration_ms,
-                metadata={"agent_type": agent_type}
+                metadata=track_metadata
             )
             print(f"✅ Interaction tracked, about to return response", flush=True)
             sys.stdout.flush()
@@ -2417,6 +2428,11 @@ VOICE OUTPUT FORMAT (CRITICAL):
         timeout_seconds = 25.0 if current_provider == "gemini" else 20.0
         print(f"⏱️ Agent execution timed out after {timeout_seconds} seconds")
         print(f"⏱️ Provider: {current_provider}, This likely means Gemini LLM is hanging during tool calling or response generation")
+        # Merge provided metadata with agent_type
+        track_metadata = {"agent_type": agent_type}
+        if metadata:
+            track_metadata.update(metadata)
+            
         monitor.track_interaction(
             request_id=request_id,
             user_id=user_id,
@@ -2429,7 +2445,7 @@ VOICE OUTPUT FORMAT (CRITICAL):
             status=AgentInteractionStatus.TIMEOUT,
             duration_ms=duration_ms,
             error=f"Agent execution timed out after {timeout_seconds} seconds (provider: {current_provider})",
-            metadata={"agent_type": agent_type}
+            metadata=track_metadata
         )
         # Return a special marker for timeout
         return "AGENT_TIMEOUT: Taking too long to process. Please try a simpler request."
