@@ -134,6 +134,7 @@ class LiveKitRoomSession:
         self.local_track = None # To prevent GC
         self.assistant_speaking = False # Track if assistant is talking
         self._interrupted = False  # Flag to interrupt audio playback
+        self.on_audio_frame = None # Callback for real-time audio streaming
         # NO MORE RECORDING LOCK - using atomic boolean and queue
 
     def start(self):
@@ -172,6 +173,10 @@ class LiveKitRoomSession:
                 self._schedule_subscription_retry(1.5, reason="recording_start_1.5s")
             except Exception:
                 pass
+
+    def set_audio_callback(self, callback):
+        """Set a callback function to receive real-time audio frames (pcm_bytes)"""
+        self.on_audio_frame = callback
 
     def pop_audio_buffer(self) -> bytes:
         # NO LOCK: Queue.get_nowait() is thread-safe and non-blocking for greenlets
@@ -387,6 +392,14 @@ class LiveKitRoomSession:
         # NO LOCK for the queue itself as it is thread-safe
         self.audio_queue.put(pcm_bytes)
         self._frame_count += 1
+        
+        # Real-time Streaming Callback
+        if self.on_audio_frame:
+            try:
+                self.on_audio_frame(pcm_bytes)
+            except Exception as e:
+                if self._frame_count % 100 == 0:
+                     print(f"⚠️ LiveKit audio callback error: {e}", flush=True)
         
         # Periodic logging of success
         if self._frame_count <= 3 or self._frame_count % 100 == 0:
@@ -788,6 +801,11 @@ class LiveKitSessionManager:
         session = self.get_session(session_id)
         if session:
             session.set_recording(enabled)
+
+    def set_audio_callback(self, session_id: str, callback):
+        session = self.get_session(session_id)
+        if session:
+            session.set_audio_callback(callback)
 
     def pop_audio_buffer(self, session_id: str) -> bytes:
         session = self.get_session(session_id)

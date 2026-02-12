@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -17,34 +18,41 @@
             justify-content: center;
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
         }
+
         .voice-container {
             background: white;
             border-radius: 20px;
             padding: 40px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
             max-width: 600px;
             width: 100%;
         }
+
         .voice-header {
             text-align: center;
             margin-bottom: 30px;
         }
+
         .voice-header h1 {
             color: #667eea;
             font-weight: bold;
             margin-bottom: 10px;
         }
+
         .voice-header p {
             color: #6c757d;
             font-size: 0.95rem;
         }
+
         .auth-section {
             margin-bottom: 30px;
         }
+
         .voice-controls {
             text-align: center;
             margin: 30px 0;
         }
+
         .mic-button {
             width: 150px;
             height: 150px;
@@ -59,37 +67,61 @@
             position: relative;
             overflow: hidden;
         }
+
         .mic-button:hover:not(:disabled) {
             transform: scale(1.05);
             box-shadow: 0 15px 40px rgba(102, 126, 234, 0.6);
         }
+
         .mic-button:active:not(:disabled) {
             transform: scale(0.95);
         }
+
         .mic-button.recording {
             background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
             animation: pulse 1.5s infinite;
         }
+
         .mic-button.processing {
             background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
         }
+
         .mic-button:disabled {
             opacity: 0.6;
             cursor: not-allowed;
         }
+
         @keyframes pulse {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.1); }
+
+            0%,
+            100% {
+                transform: scale(1);
+            }
+
+            50% {
+                transform: scale(1.1);
+            }
         }
+
         .status-message {
             text-align: center;
             margin: 20px 0;
             min-height: 30px;
             font-weight: 500;
         }
-        .status-message.info { color: #0dcaf0; }
-        .status-message.success { color: #198754; }
-        .status-message.error { color: #dc3545; }
+
+        .status-message.info {
+            color: #0dcaf0;
+        }
+
+        .status-message.success {
+            color: #198754;
+        }
+
+        .status-message.error {
+            color: #dc3545;
+        }
+
         .transcript-box {
             background: #f8f9fa;
             border-radius: 10px;
@@ -99,40 +131,61 @@
             max-height: 300px;
             overflow-y: auto;
         }
+
         .transcript-item {
             margin-bottom: 15px;
             padding: 10px;
             border-radius: 8px;
         }
+
         .transcript-item.user {
             background: #e3f2fd;
             text-align: right;
         }
+
         .transcript-item.agent {
             background: #f3e5f5;
             text-align: left;
         }
+
         .transcript-label {
             font-weight: bold;
             font-size: 0.85rem;
             margin-bottom: 5px;
         }
-        .user .transcript-label { color: #1976d2; }
-        .agent .transcript-label { color: #7b1fa2; }
+
+        .user .transcript-label {
+            color: #1976d2;
+        }
+
+        .agent .transcript-label {
+            color: #7b1fa2;
+        }
+
         .streaming-text {
             color: #6a1b9a;
             font-style: italic;
         }
+
         .streaming-text::after {
             content: "█";
             animation: blink 1s step-end infinite;
             font-size: 0.8rem;
             margin-left: 2px;
         }
+
         @keyframes blink {
-            from, to { opacity: 1; }
-            50% { opacity: 0; }
+
+            from,
+            to {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0;
+            }
         }
+
         .livekit-status {
             display: inline-flex;
             align-items: center;
@@ -143,28 +196,42 @@
             background: #f1f3f5;
             color: #6c757d;
         }
+
         .livekit-status.online {
             background: #e6f4ea;
             color: #198754;
         }
+
         .livekit-status.connecting {
             background: #fff3cd;
             color: #b58100;
         }
+
         .livekit-status.offline {
             background: #f8d7da;
             color: #dc3545;
         }
+
         .livekit-status.speaking {
             background: #f3e5f5;
             color: #7b1fa2;
             animation: pulse-purple 1.5s infinite;
         }
+
         @keyframes pulse-purple {
-            0% { box-shadow: 0 0 0 0 rgba(123, 31, 162, 0.4); }
-            70% { box-shadow: 0 0 0 10px rgba(123, 31, 162, 0); }
-            100% { box-shadow: 0 0 0 0 rgba(123, 31, 162, 0); }
+            0% {
+                box-shadow: 0 0 0 0 rgba(123, 31, 162, 0.4);
+            }
+
+            70% {
+                box-shadow: 0 0 0 10px rgba(123, 31, 162, 0);
+            }
+
+            100% {
+                box-shadow: 0 0 0 0 rgba(123, 31, 162, 0);
+            }
         }
+
         .debug-panel {
             background: #f8f9fa;
             border: 1px solid #dee2e6;
@@ -173,11 +240,13 @@
             margin-top: 12px;
             font-size: 0.8rem;
         }
+
         .debug-panel pre {
             margin: 0;
             white-space: pre-wrap;
             word-break: break-all;
         }
+
         .flow-diagram {
             margin-top: 16px;
             padding: 12px 14px;
@@ -187,12 +256,14 @@
             font-size: 0.85rem;
             color: #374151;
         }
+
         .flow-diagram pre {
             margin: 8px 0 0;
             white-space: pre-wrap;
         }
     </style>
 </head>
+
 <body>
     <div class="voice-container">
         <div class="voice-header">
@@ -212,7 +283,8 @@
             <div class="status-message" id="authStatusMessage"></div>
             <div class="mb-3">
                 <label for="pinInput" class="form-label">Enter Your PIN</label>
-                <input type="password" class="form-control" id="pinInput" placeholder="Enter 4-6 digit PIN" maxlength="6">
+                <input type="password" class="form-control" id="pinInput" placeholder="Enter 4-6 digit PIN"
+                    maxlength="6">
             </div>
             <div class="form-check mb-3">
                 <input class="form-check-input" type="checkbox" id="rememberPinCheckbox">
@@ -282,7 +354,7 @@ LiveKit SFU → Browser playback
         async function cleanupLivekit() {
             try {
                 if (livekitRoom) {
-                    try { livekitRoom.disconnect(); } catch (_) {}
+                    try { livekitRoom.disconnect(); } catch (_) { }
                 }
             } finally {
                 livekitRoom = null;
@@ -291,7 +363,7 @@ LiveKit SFU → Browser playback
                 livekitMicEnabled = false;
                 localAudioTrack = null;
                 livekitAudioElements.forEach((element) => {
-                    try { element.pause(); } catch (_) {}
+                    try { element.pause(); } catch (_) { }
                 });
                 livekitAudioElements.clear();
             }
@@ -299,8 +371,8 @@ LiveKit SFU → Browser playback
 
         function cleanupSocket() {
             if (socket) {
-                try { socket.off(); } catch (_) {}
-                try { socket.disconnect(); } catch (_) {}
+                try { socket.off(); } catch (_) { }
+                try { socket.disconnect(); } catch (_) { }
             }
             socket = null;
         }
@@ -375,12 +447,12 @@ LiveKit SFU → Browser playback
             if (assistantSpeaking !== value) {
                 console.log(`🎙️ assistantSpeaking: ${assistantSpeaking} -> ${value} (reason: ${reason})`);
                 assistantSpeaking = value;
-                
+
                 const indicator = document.getElementById('speakingIndicator');
                 if (indicator) {
                     indicator.style.display = value ? 'inline-flex' : 'none';
                 }
-                
+
                 if (value) {
                     assistantStartedSpeakingAt = Date.now();
                 } else {
@@ -521,7 +593,7 @@ LiveKit SFU → Browser playback
         function addTranscript(role, text, overwriteStreaming = false) {
             const box = document.getElementById('transcriptBox');
             if (!box) return;
-            
+
             // If overwriting streaming, use the existing item or create new
             if (overwriteStreaming && currentStreamingItem && currentStreamingItem.dataset.role === role) {
                 const textDiv = currentStreamingItem.querySelector('.streaming-text');
@@ -555,17 +627,17 @@ LiveKit SFU → Browser playback
         }
 
         let audioInterruptedAt = 0;  // Track when audio was interrupted
-        
+
         function stopAllPlayback() {
             setAssistantSpeaking(false, 'stopAllPlayback');
             audioInterruptedAt = Date.now();
-            
+
             // Signal server to stop sending audio
             if (socket && socket.connected) {
                 socket.emit('stop_audio');
                 console.log('🛑 Emitted stop_audio to server');
             }
-            
+
             // Mute LiveKit audio instead of pausing - this allows the stream to continue
             // so when we unmute, we hear current audio not old buffered audio
             livekitAudioElements.forEach((element, sid) => {
@@ -588,11 +660,11 @@ LiveKit SFU → Browser playback
 
         function resumeLiveKitPlayback() {
             if (!LIVEKIT_ENABLED) return;
-            
+
             // Add a delay after interrupt to let old audio drain
             const timeSinceInterrupt = Date.now() - audioInterruptedAt;
             const minDelay = 300; // 300ms delay after interrupt
-            
+
             const doResume = () => {
                 livekitAudioElements.forEach((element, sid) => {
                     try {
@@ -613,7 +685,7 @@ LiveKit SFU → Browser playback
                     }
                 });
             };
-            
+
             // If recently interrupted, delay the resume
             if (audioInterruptedAt > 0 && timeSinceInterrupt < minDelay) {
                 setTimeout(doResume, minDelay - timeSinceInterrupt);
@@ -772,7 +844,7 @@ LiveKit SFU → Browser playback
                         element.style.pointerEvents = 'none';
                         element.id = `audio-${track.sid}`;
                         document.body.appendChild(element);
-                        
+
                         element.onended = () => {
                             console.log(`⏹️ Audio track ended: ${track.sid}`);
                             setAssistantSpeaking(false, 'onended');
@@ -780,7 +852,7 @@ LiveKit SFU → Browser playback
                                 showStatus('Listening... (hands-free)', 'success');
                             }
                         };
-                        
+
                         const playAudio = () => {
                             console.log(`📡 Attempting to play track: ${track.sid}`);
                             element.play().then(() => {
@@ -800,10 +872,10 @@ LiveKit SFU → Browser playback
 
                         // Small delay to ensure DOM attachment
                         setTimeout(playAudio, 100);
-                        
+
                         // Retry on next click if blocked
                         document.addEventListener('click', playAudio, { once: true });
-                        
+
                         livekitAudioElements.set(track.sid, element);
                     }
                 });
@@ -895,7 +967,7 @@ LiveKit SFU → Browser playback
 
         async function setMicrophoneEnabled(enabled) {
             if (!livekitRoom) return false;
-            
+
             // If assistant is speaking and we want to enable mic, check if we should block it
             if (enabled && assistantSpeaking) {
                 console.log('🔇 Mic enable blocked while assistant is speaking');
@@ -1041,7 +1113,7 @@ LiveKit SFU → Browser playback
                         }, 800);
                     }
                 }
-                
+
                 // If using LiveKit and it's a short response, the audio was sent via PCM.
                 // We'll set assistantSpeaking to false after a delay based on text length.
                 if (LIVEKIT_ENABLED) {
@@ -1055,7 +1127,7 @@ LiveKit SFU → Browser playback
                         }
                     }, Math.min(estimatedDuration, 5000));
                 }
-                
+
                 if (data && data.pending) {
                     const pendingUserId = data.user_id || localStorage.getItem('voice_assistant_user_id');
                     if (pendingUserId) {
@@ -1179,7 +1251,7 @@ LiveKit SFU → Browser playback
             vadSilenceFrames = 0;
             vadSpeechFrames = 0;
             if (vadContext && vadContext.state === 'suspended') {
-                try { await vadContext.resume(); } catch (_) {}
+                try { await vadContext.resume(); } catch (_) { }
             }
             const button = document.getElementById('micButton');
             const icon = document.getElementById('micIcon');
@@ -1219,7 +1291,7 @@ LiveKit SFU → Browser playback
         }
 
         let processingTimeout = null;
-        
+
         async function stopRecording(options = {}) {
             const skipMicDisable = options.skipMicDisable || false;
             const silentUI = options.silentUI || false;
@@ -1315,35 +1387,35 @@ LiveKit SFU → Browser playback
                     }
                     const rms = Math.sqrt(sum / data.length);
                     vadLoopCount++;
-                    
+
                     // Debug: log every 50 iterations (5 seconds) to confirm VAD is running
                     if (vadLoopCount % 50 === 0) {
                         console.log(`🔊 VAD status: rms=${rms.toFixed(4)}, threshold=${VAD_THRESHOLD}, isRecording=${isRecording}, speechFrames=${vadSpeechFrames}, silenceFrames=${vadSilenceFrames}`);
                     }
-                    
+
                     // Debug: log high volume frames
                     if (rms > VAD_THRESHOLD * 0.5) {
                         console.log(`🔊 VAD detected activity: rms=${rms.toFixed(4)}, threshold=${VAD_THRESHOLD}, isRecording=${isRecording}, speechFrames=${vadSpeechFrames}`);
                     }
-                    
-                // Cooldown: ignore VAD for 1 second after assistant starts speaking to avoid echo from start of audio
-                const timeSinceAssistantStarted = Date.now() - assistantStartedSpeakingAt;
-                if (assistantSpeaking && timeSinceAssistantStarted < 1000) {
-                    return;
-                }
-                
-                // Cooldown: ignore VAD for 1.5 seconds after assistant STOPS speaking to avoid detecting echo
-                const timeSinceAssistantStopped = Date.now() - assistantStoppedSpeakingAt;
-                if (!assistantSpeaking && assistantStoppedSpeakingAt > 0 && timeSinceAssistantStopped < 1500) {
-                    // Reset speech frames during cooldown to prevent false triggers
-                    vadSpeechFrames = 0;
-                    return;
-                }
 
-                // If assistant is speaking, use a MUCH higher threshold to avoid self-interruption (echo)
-                // Increased multiplier from 35 to 50 for more safety
-                const effectiveThreshold = assistantSpeaking ? (VAD_THRESHOLD * 50) : VAD_THRESHOLD;
-                    
+                    // Cooldown: ignore VAD for 1 second after assistant starts speaking to avoid echo from start of audio
+                    const timeSinceAssistantStarted = Date.now() - assistantStartedSpeakingAt;
+                    if (assistantSpeaking && timeSinceAssistantStarted < 1000) {
+                        return;
+                    }
+
+                    // Cooldown: ignore VAD for 1.5 seconds after assistant STOPS speaking to avoid detecting echo
+                    const timeSinceAssistantStopped = Date.now() - assistantStoppedSpeakingAt;
+                    if (!assistantSpeaking && assistantStoppedSpeakingAt > 0 && timeSinceAssistantStopped < 1500) {
+                        // Reset speech frames during cooldown to prevent false triggers
+                        vadSpeechFrames = 0;
+                        return;
+                    }
+
+                    // If assistant is speaking, use a MUCH higher threshold to avoid self-interruption (echo)
+                    // Increased multiplier from 35 to 50 for more safety
+                    const effectiveThreshold = assistantSpeaking ? (VAD_THRESHOLD * 50) : VAD_THRESHOLD;
+
                     if (rms > effectiveThreshold) {
                         if (assistantSpeaking) {
                             console.log(`🗣️ User interrupted assistant (volume: ${rms.toFixed(4)}, threshold: ${effectiveThreshold.toFixed(4)})`);
@@ -1371,7 +1443,7 @@ LiveKit SFU → Browser playback
         }
 
         let processingStartedAt = 0;  // Track when processing started
-        
+
         function toggleRecording() {
             // If processing, allow user to force reset after 5 seconds
             if (isProcessing) {
@@ -1427,7 +1499,7 @@ LiveKit SFU → Browser playback
                 if (userGestureUnlocked) return;
                 userGestureUnlocked = true;
                 if (vadContext && vadContext.state === 'suspended') {
-                    vadContext.resume().catch(() => {});
+                    vadContext.resume().catch(() => { });
                 }
                 if (handsFreeEnabled && !vadTimer) {
                     startVadLoop();
@@ -1437,4 +1509,5 @@ LiveKit SFU → Browser playback
         });
     </script>
 </body>
+
 </html>

@@ -438,6 +438,47 @@ class ElevenLabsService:
         emotion = style_to_emotion.get(style.lower(), EmotionType.NEUTRAL)
         return self.synthesize_with_emotion(text, emotion, voice_id, model)
 
+    def transcribe_audio_buffer(self, audio_buffer: bytes, language: str = "en") -> Optional[str]:
+        """
+        Transcribe audio buffer using ElevenLabs Scribe STT
+        
+        Args:
+            audio_buffer: Raw audio bytes
+            language: Language code (default: en) - Note: Scribe v1 auto-detects, but we keep sig for compatibility
+            
+        Returns:
+            Transcribed text or None
+        """
+        if not self.is_available():
+            return None
+            
+        try:
+            logger.info(f"📤 ElevenLabs Scribe: Uploading {len(audio_buffer)} bytes...")
+            
+            # Use Python SDK if available and supports speech_to_text
+            if hasattr(self.client, 'speech_to_text') and hasattr(self.client.speech_to_text, 'convert'):
+                # Scribe API - requires file-like object
+                import io
+                # We can wrap bytes in BytesIO and name it with .wav extension
+                audio_file = io.BytesIO(audio_buffer)
+                audio_file.name = "audio.wav"
+                
+                transcription = self.client.speech_to_text.convert(
+                    file=audio_file,
+                    model_id="scribev1" # Use Scribe v1
+                )
+                
+                text = transcription.text
+                logger.info(f"✅ ElevenLabs STT success: '{text}'")
+                return text
+            else:
+                logger.warning("⚠️ ElevenLabs SDK does not support STT or method not found.")
+                return None
+                
+        except Exception as e:
+            logger.error(f"❌ ElevenLabs Scribe STT failed: {e}")
+            return None
+
 
 # Global service instance
 _elevenlabs_service = None

@@ -1630,6 +1630,7 @@ async def _run_agent_async(
     model: Optional[str] = None,  # Optional model override (e.g., "claude-3-5-haiku-20241022" for voice)
     text_chunk_callback: Optional[callable] = None,  # Optional callback for text chunks (for early TTS)
     tool_call_callback: Optional[callable] = None,   # Optional callback when tool calls are detected
+    metadata: Optional[dict] = None,                 # Optional metadata for monitoring (e.g. STT/TTS provider)
 ) -> str | dict:
     """Runs the agent for a given prompt and returns the final response.
     
@@ -2423,6 +2424,12 @@ VOICE OUTPUT FORMAT (CRITICAL):
         
         # Track error
         duration_ms = (time.time() - start_time) * 1000
+        
+        # Merge provided metadata with agent_type
+        track_metadata = {"agent_type": agent_type}
+        if metadata:
+            track_metadata.update(metadata)
+            
         monitor.track_interaction(
             request_id=request_id,
             user_id=user_id,
@@ -2435,7 +2442,7 @@ VOICE OUTPUT FORMAT (CRITICAL):
             status=AgentInteractionStatus.FAILED,
             duration_ms=duration_ms,
             error=error_str,
-            metadata={"agent_type": agent_type}
+            metadata=track_metadata
         )
         
         # Check if it's a model 404 error - if so, clear cache and retry once
@@ -2803,9 +2810,7 @@ def get_user_llm_provider():
         provider_manager = get_llm_provider_manager()
         return jsonify({
             'success': True,
-            'provider': provider,
-            'user_id': user_id,
-            'available': provider_manager.is_provider_available(provider)
+            'provider': provider
         })
     except Exception as e:
         return jsonify({
@@ -2818,59 +2823,48 @@ def get_user_llm_provider():
 def set_user_llm_provider():
     """Set user's LLM provider preference."""
     try:
-        data = request.get_json()
-        if not isinstance(data, dict):
+        data = request.json
+        user_id = data.get('user_id', 'default')
+        provider = data.get('provider')
+        
+        if not provider:
             return jsonify({
                 'success': False,
-                'error': 'Invalid JSON body'
+                'error': 'Provider is required'
             }), 400
-
-        user_id = data.get('user_id')
-        provider = data.get('provider', 'claude').lower()
-        
-        if not user_id:
-            return jsonify({
-                'success': False,
-                'error': 'user_id required in request body'
-            }), 400
-        
+            
+        provider = provider.lower()
         if provider not in ['claude', 'gemini', 'openai']:
             return jsonify({
                 'success': False,
-                'error': 'provider must be one of: claude, gemini, openai'
+                'error': 'Invalid provider'
             }), 400
-        
-        # Validate provider is available
-        provider_manager = get_llm_provider_manager()
-        if not provider_manager.is_provider_available(provider):
+            
+        try:
+            # Check if provider is available
+            provider_manager = get_llm_provider_manager()
+            if not provider_manager.is_provider_available(provider):
+                return jsonify({
+                    'success': False,
+                    'error': f'Provider {provider} is not configured (missing API key)'
+                }), 400
+                
+            # Save to Redis
+            redis_manager.set(f"user:{user_id}:llm_provider", provider)
+            
+            # Clear any cached agent graph to force rebuild with new provider
+            global _agent_graph_cache, _agent_graph_provider
+            _agent_graph_cache = None
+            _agent_graph_provider = None
+        except Exception as e:
+            print(f"⚠️ Error setting LLM provider: {e}")
             return jsonify({
                 'success': False,
-                'error': f'Provider {provider} is not available. Please configure the API key.'
-            }), 400
-
-        # Store in Redis (expires in 30 days) - best-effort only
-        try:
-            redis_manager.set(
-                f"user:{user_id}:llm_provider",
-                provider,
-                expire=30 * 24 * 60 * 60  # 30 days
-            )
-        except Exception as redis_error:
-            print(f"⚠️ Failed to store LLM provider in Redis: {redis_error}")
-        
-        # Clear agent graph cache to force reinitialization with new provider (best-effort)
-        try:
-            global _agent_graph_cache, _agent_graph_provider
-            if _agent_graph_provider != provider:
-                _agent_graph_cache = None
-                _agent_graph_provider = None
-                print(f"🔄 Cleared agent graph cache due to provider change to {provider}")
-        except Exception as cache_error:
-            print(f"⚠️ Failed to clear agent graph cache: {cache_error}")
-        
+                'error': 'Failed to save preference'
+            }), 500
+            
         return jsonify({
             'success': True,
-            'provider': provider,
             'message': f'LLM provider set to {provider}'
         })
     except Exception as e:

@@ -71,6 +71,14 @@ except ImportError as e:
     print(f"⚠️ ElevenLabs not available: {e}")
     ELEVENLABS_AVAILABLE = False
 
+# Cartesia integration
+try:
+    from convonet.cartesia_service import get_cartesia_service
+    CARTESIA_AVAILABLE = True
+except ImportError as e:
+    print(f"⚠️ Cartesia not available: {e}")
+    CARTESIA_AVAILABLE = False
+
 # Import the blueprint (optional - not used in this module)
 # from convonet.routes import convonet_todo_bp
 
@@ -286,6 +294,57 @@ def _get_llm_provider_for_user(user_id: Optional[str]) -> str:
         provider = os.getenv("LLM_PROVIDER", "claude").lower()
     if provider not in ["claude", "gemini", "openai"]:
         provider = "claude"
+    return provider
+
+def _get_stt_provider_for_user(user_id: Optional[str]) -> str:
+    """Get STT provider: 'deepgram', 'cartesia', or 'elevenlabs'"""
+    # Default to deepgram for low latency
+    provider = None
+    if redis_manager.is_available():
+        try:
+            if user_id:
+                provider = redis_manager.redis_client.get(f"user:{user_id}:stt_provider")
+            if not provider:
+                provider = redis_manager.redis_client.get("user:default:stt_provider")
+        except Exception:
+            pass
+            
+    if not provider:
+        provider = "deepgram"
+        
+    # Validation
+    if provider == "cartesia" and not CARTESIA_AVAILABLE:
+        provider = "deepgram"
+    if provider == "elevenlabs" and not ELEVENLABS_AVAILABLE:
+        provider = "deepgram"
+        
+    return provider
+
+def _get_tts_provider_for_user(user_id: Optional[str]) -> str:
+    """Get TTS provider: 'deepgram', 'cartesia', or 'elevenlabs'"""
+    provider = None
+    if redis_manager.is_available():
+        try:
+            if user_id:
+                provider = redis_manager.redis_client.get(f"user:{user_id}:tts_provider")
+            if not provider:
+                provider = redis_manager.redis_client.get("user:default:tts_provider")
+        except Exception:
+            pass
+            
+    if not provider:
+        # Default to ElevenLabs if available (highest quality), else Deepgram
+        if ELEVENLABS_AVAILABLE:
+            provider = "elevenlabs"
+        else:
+            provider = "deepgram"
+            
+    # Validation
+    if provider == "cartesia" and not CARTESIA_AVAILABLE:
+        provider = "deepgram"
+    if provider == "elevenlabs" and not ELEVENLABS_AVAILABLE:
+        provider = "deepgram"
+        
     return provider
 
 def _select_voice_model(user_id: Optional[str]) -> str:
@@ -2291,15 +2350,18 @@ def init_socketio(socketio_instance: SocketIO, app):
                 emit('error', {'message': 'LiveKit recording failed. Please try again.'})
                 return
 
-        # Update recording state after LiveKit is ready
         if redis_manager.is_available():
             update_session(session_id, {'is_recording': 'True'})
         else:
             active_sessions[session_id]['is_recording'] = True
 
+        # Check STT provider preference
+        stt_provider = _get_stt_provider_for_user(session_data.get('user_id') if session_data else None)
+        print(f"🎤 using STT provider: {stt_provider} for session {session_id}", flush=True)
 
         # Start streaming STT session for low-latency transcription
-        if STREAMING_STT_ENABLED and DEEPGRAM_STREAMING_AVAILABLE and not _livekit_input_active():
+        # Only if Deepgram is selected (Cartesia/ElevenLabs use batch fallback)
+        if stt_provider == "deepgram" and STREAMING_STT_ENABLED and DEEPGRAM_STREAMING_AVAILABLE:
             try:
                 # Clean up any previous streaming session
                 if session_id in streaming_sessions:
@@ -2330,6 +2392,20 @@ def init_socketio(socketio_instance: SocketIO, app):
                 streaming_session.start()
                 streaming_sessions[session_id] = streaming_session
                 print(f"✅ Streaming STT session started for {session_id}", flush=True)
+
+                # NEW: Pipe LiveKit audio directly to streaming session
+                if _livekit_input_active():
+                    def livekit_audio_callback(pcm_bytes):
+                        if session_id in streaming_sessions:
+                            try:
+                                streaming_session = streaming_sessions[session_id]
+                                streaming_session.send_audio(pcm_bytes)
+                            except Exception as e:
+                                print(f"⚠️ LiveKit pipe error: {e}", flush=True)
+                    
+                    livekit_manager.set_audio_callback(session_id, livekit_audio_callback)
+                    print(f"🔗 LiveKit audio callback registered for {session_id}", flush=True)
+
             except Exception as stream_error:
                 print(f"⚠️ Failed to start streaming STT: {stream_error}", flush=True)
         
@@ -2526,6 +2602,11 @@ def init_socketio(socketio_instance: SocketIO, app):
         # If streaming STT is active, stop the stream and return (skip batch transcription)
         if STREAMING_STT_ENABLED and session_id in streaming_sessions:
             try:
+                # Unregister LiveKit callback if active
+                if _livekit_input_active():
+                    livekit_manager.set_audio_callback(session_id, None)
+                    print(f"🔗 LiveKit audio callback unregistered for {session_id}", flush=True)
+
                 streaming_sessions[session_id].stop()
                 del streaming_sessions[session_id]
                 print(f"🛑 Streaming STT session stopped for {session_id}", flush=True)
@@ -3001,36 +3082,36 @@ def init_socketio(socketio_instance: SocketIO, app):
                 # LATENCY OPTIMIZATION: Prepare TTS settings EARLY (before agent processing)
                 # This allows us to start TTS generation as soon as first sentence arrives
                 user_id = session.get('user_id')
-                voice_prefs = get_voice_preferences() if ELEVENLABS_AVAILABLE else None
-                tts_provider = "deepgram"  # Default fallback
-                use_elevenlabs = False
-                voice_id = None
-                language = "en"
-                emotion_enabled = False
-                emotion = None
-                
                 # Determine TTS provider and settings (early, before agent processing)
-                if ELEVENLABS_AVAILABLE and voice_prefs:
+                tts_provider = _get_tts_provider_for_user(user_id)
+                voice_prefs = get_voice_preferences() if ELEVENLABS_AVAILABLE else None
+                
+                # Fetch settings based on provider
+                if tts_provider == "elevenlabs" and ELEVENLABS_AVAILABLE and voice_prefs:
                     try:
-                        elevenlabs = get_elevenlabs_service()
-                        if elevenlabs and elevenlabs.is_available():
-                            prefs = voice_prefs.get_user_preferences(user_id) if user_id else voice_prefs._get_default_preferences()
-                            if prefs.get("use_elevenlabs", True):
-                                use_elevenlabs = True
-                                tts_provider = "elevenlabs"
-                                voice_id = prefs.get("voice_id")
-                                language = prefs.get("language", "en")
-                                emotion_enabled = prefs.get("emotion_enabled", True)
-                                # Note: Emotion detection will happen after we get first sentence
+                        prefs = voice_prefs.get_user_preferences(user_id) if user_id else voice_prefs._get_default_preferences()
+                        voice_id = prefs.get("voice_id")
+                        language = prefs.get("language", "en")
+                        emotion_enabled = prefs.get("emotion_enabled", True)
                     except Exception as e:
-                        print(f"⚠️ ElevenLabs setup failed, falling back to Deepgram: {e}", flush=True)
-                        use_elevenlabs = False
+                         print(f"⚠️ ElevenLabs setup failed, falling back to Deepgram: {e}", flush=True)
+                         tts_provider = "deepgram"
+                elif tts_provider == "cartesia" and CARTESIA_AVAILABLE:
+                    # Cartesia Setup (can add preferences later)
+                    pass
+
+                if _livekit_active():
+                    # LiveKit tends to work best with Deepgram's raw linear16 or Cartesia's raw pcm
+                    # ElevenLabs returns mp3 by default which is harder to stream raw
+                    # For now, we allow other providers even with LiveKit if they return PCM or we decode it
+                    # But if issues arise, might force deepgram.
+                    # Current code forced Deepgram. Let's relax this IF we handle decoding.
+                    # For now, keep fallback logic if provider doesn't support raw PCM easily.
+                    # Deepgram and Cartesia support Raw PCM. ElevenLabs is MP3 (requires decoding).
+                    if tts_provider == "elevenlabs":
+                        print("ℹ️ LiveKit active - disabling ElevenLabs (MP3) to keep PCM audio, using Deepgram", flush=True)
                         tts_provider = "deepgram"
 
-                if _livekit_active() and use_elevenlabs:
-                    print("ℹ️ LiveKit active - disabling ElevenLabs to keep PCM audio", flush=True)
-                    use_elevenlabs = False
-                    tts_provider = "deepgram"
                 
                 print(f"🤖 Starting agent processing for: {transcribed_text[:100]}", flush=True)
                 sys.stdout.flush()
@@ -3207,7 +3288,18 @@ def init_socketio(socketio_instance: SocketIO, app):
                                 if deepgram_tts_service:
                                     chunk_audio = deepgram_tts_service.synthesize_speech(first_sentence, voice="aura-asteria-en")
 
-                            if not chunk_audio and use_elevenlabs and not _livekit_active():
+                            if not chunk_audio and tts_provider == "cartesia":
+                                try:
+                                    cartesia_service = get_cartesia_service()
+                                    if cartesia_service and cartesia_service.is_available():
+                                        # Synthesize first sentence
+                                        # Cartesia returns a generator, we process all chunks for this sentence
+                                        audio_generator = cartesia_service.synthesize_stream(first_sentence)
+                                        chunk_audio = b"".join([chunk for chunk in audio_generator])
+                                except Exception as e:
+                                    print(f"⚠️ Early Cartesia TTS failed: {e}", flush=True)
+                            
+                            if not chunk_audio and tts_provider == "elevenlabs":
                                 try:
                                     elevenlabs_service = get_elevenlabs_service()
                                     if elevenlabs_service and elevenlabs_service.is_available():
@@ -3441,22 +3533,29 @@ def init_socketio(socketio_instance: SocketIO, app):
                             livekit_audio_sent = False
                         
                             # Initialize TTS service
+                            # Initialize TTS service
                             elevenlabs_service = None
+                            cartesia_service = None
                             deepgram_tts_service = None
-                            use_livekit_audio = _livekit_active()
-                            if use_livekit_audio:
-                                use_elevenlabs = False
-                            if use_elevenlabs:
+                            
+                            if tts_provider == "elevenlabs":
                                 try:
                                     elevenlabs_service = get_elevenlabs_service()
                                     if not elevenlabs_service or not elevenlabs_service.is_available():
-                                        use_elevenlabs = False
+                                        print("⚠️ ElevenLabs unavail, falling back to Deepgram", flush=True)
                                         tts_provider = "deepgram"
                                 except:
-                                    use_elevenlabs = False
+                                    tts_provider = "deepgram"
+                            elif tts_provider == "cartesia":
+                                try:
+                                    cartesia_service = get_cartesia_service()
+                                    if not cartesia_service or not cartesia_service.is_available():
+                                        print("⚠️ Cartesia unavail, falling back to Deepgram", flush=True)
+                                        tts_provider = "deepgram"
+                                except:
                                     tts_provider = "deepgram"
                         
-                            if not use_elevenlabs:
+                            if tts_provider == "deepgram":
                                 deepgram_tts_service = get_deepgram_tts_service()
                         
                             # Process each chunk (skip first if already generated via early TTS)
@@ -3470,7 +3569,7 @@ def init_socketio(socketio_instance: SocketIO, app):
                                 try:
                                     chunk_audio = None
                         
-                                    if use_elevenlabs and elevenlabs_service:
+                                    if tts_provider == "elevenlabs" and elevenlabs_service:
                                         try:
                                             if emotion_enabled and emotion:
                                                 chunk_audio = elevenlabs_service.synthesize_with_emotion(
@@ -3491,6 +3590,14 @@ def init_socketio(socketio_instance: SocketIO, app):
                                                 )
                                         except Exception as e:
                                             print(f"⚠️ ElevenLabs chunk {chunk_idx+1}/{len(text_chunks)} failed: {e}", flush=True)
+                                            chunk_audio = None
+                                    elif tts_provider == "cartesia" and cartesia_service:
+                                        try:
+                                            # Cartesia returns generator, consume it all for the chunk
+                                            audio_gen = cartesia_service.synthesize_stream(text_chunk)
+                                            chunk_audio = b"".join([c for c in audio_gen])
+                                        except Exception as e:
+                                            print(f"⚠️ Cartesia chunk {chunk_idx+1}/{len(text_chunks)} failed: {e}", flush=True)
                                             chunk_audio = None
                         
                                     if not chunk_audio:
@@ -3903,6 +4010,10 @@ async def process_with_agent(
         # Claude Haiku is ~2-3x faster than Sonnet 4, reducing agent processing time from ~5s to ~2-3s
         voice_model = _select_voice_model(user_id)  # Faster model for voice responses
         
+        # Get provider info for monitoring
+        stt_provider = _get_stt_provider_for_user(user_id)
+        tts_provider = _get_tts_provider_for_user(user_id)
+        
         # Use the same agent processing function as Twilio, but with faster model for voice
         result = await _run_agent_async(
             prompt=text,
@@ -3912,9 +4023,14 @@ async def process_with_agent(
             include_metadata=True,
             socketio=socketio,
             session_id=session_id,
-            model=voice_model,  # Use faster model for voice responses
-            text_chunk_callback=text_chunk_callback,  # Pass callback for early TTS
-            tool_call_callback=tool_call_callback,    # Pass callback for filler on tool calls
+            model=voice_model,
+            text_chunk_callback=text_chunk_callback,
+            tool_call_callback=tool_call_callback,
+            metadata={
+                "source": "voice",
+                "stt_provider": stt_provider,
+                "tts_provider": tts_provider
+            }
         )
         
         if isinstance(result, dict):
