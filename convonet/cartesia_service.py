@@ -137,7 +137,10 @@ class CartesiaService:
             chunk_iter = self.client.tts.bytes(
                 model_id=self.model_id,
                 transcript=text,
-                voice_id=voice_id,
+                voice={
+                    "mode": "id",
+                    "id": voice_id
+                },
                 output_format={
                     "container": "raw",
                     "encoding": "pcm_s16le", # PCM 16-bit little-endian
