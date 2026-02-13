@@ -37,7 +37,7 @@ class CartesiaService:
             
         # Default settings
         self.model_id = "sonic-english"  # Default TTS model
-        self.voice_id = "a0e99841-438c-4a64-b67c-3cbc96c22b02"  # Example voice (Barbershop Man)
+        self.voice_id = "228fca29-3a0a-435c-8728-5cb483251068"  # Kiefer (Sonic 3)
         self.stt_model = "ink-whisper" # Default STT model (Cartesia Ink)
         self.stt_version = "2024-02-29"
 
