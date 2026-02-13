@@ -133,8 +133,9 @@ class CartesiaService:
             voice_id = voice_id or self.voice_id
             print(f"🔊 CartesiaService.synthesize_stream: Starting for text: {text[:50]}... (voice: {voice_id})", flush=True)
             
-            # Use the SDK's iter_bytes method for streaming audio chunks
-            chunk_iter = self.client.tts.iter_bytes(
+            # Use the SDK's sse method for streaming audio chunks
+            # Returns a generator yielding dictionaries with "audio", "context_id", etc.
+            response_iter = self.client.tts.sse(
                 model_id=self.model_id,
                 transcript=text,
                 voice={
@@ -149,18 +150,18 @@ class CartesiaService:
             )
             
             chunk_count = 0
-            for chunk in chunk_iter:
+            for output in response_iter:
+                # The SSE stream yields dictionaries. Audio data is in the "audio" key as bytes.
+                chunk = output.get("audio")
                 if chunk:
                     chunk_count += 1
                     if chunk_count == 1:
                         print(f"✅ CartesiaService: Received first chunk ({len(chunk)} bytes)", flush=True)
                     yield chunk
-            print(f"✅ CartesiaService: Stream complete, total chunks: {chunk_count}", flush=True)
+            print(f"✅ CartesiaService: SSE stream complete, total chunks: {chunk_count}", flush=True)
                 
         except Exception as e:
             logger.error(f"❌ Cartesia TTS streaming error: {e}")
-            # Fallback attempt with voice dict if voice_id fails? 
-            # Actually, let's keep it simple first.
             import traceback
             traceback.print_exc()
 
