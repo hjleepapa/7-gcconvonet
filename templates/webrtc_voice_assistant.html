@@ -299,6 +299,17 @@
 
         <div id="voiceSection" style="display: none;">
             <div class="status-message" id="statusMessage"></div>
+
+            <!-- Elapsed Timer -->
+            <div id="elapsedTimer"
+                style="display: none; text-align: center; margin-bottom: 20px; font-weight: bold; color: #764ba2;">
+                Processing: <span id="timerSeconds">0</span>s
+            </div>
+
+            <!-- Hidden Audio for Processing Loop -->
+            <audio id="processingAudio" loop>
+                <source src="/static/assets/audio/processing.mp3" type="audio/mpeg">
+            </audio>
             <div class="debug-panel" id="livekitDebugPanel" style="display: none;">
                 <div><strong>LiveKit Debug</strong></div>
                 <pre id="livekitDebugText">Awaiting LiveKit token...</pre>
@@ -339,6 +350,8 @@ LiveKit SFU → Browser playback
         let socket = null;
         let isRecording = false;
         let isProcessing = false;
+        let timerInterval = null;
+        let startTime = null;
 
         let livekitRoom = null;
         let livekitConnected = false;
@@ -427,6 +440,7 @@ LiveKit SFU → Browser playback
             showStatus('Reconnecting session... Please wait.', 'warning');
             stopAllPlayback();
             resetMicButton();
+            stopProcessingAudio();
             cleanupSocket();
             cleanupLivekit();
             setTimeout(() => {
@@ -455,10 +469,54 @@ LiveKit SFU → Browser playback
 
                 if (value) {
                     assistantStartedSpeakingAt = Date.now();
+                    // Stop processing audio as soon as assistant starts speaking
+                    stopProcessingAudio();
                 } else {
                     // Track when assistant stopped speaking for echo cooldown
                     assistantStoppedSpeakingAt = Date.now();
                 }
+            }
+        }
+
+        function startProcessingAudio() {
+            const audio = document.getElementById('processingAudio');
+            if (audio) {
+                audio.play().catch(e => console.warn('⚠️ Could not play processing audio:', e));
+            }
+            startTimer();
+        }
+
+        function stopProcessingAudio() {
+            const audio = document.getElementById('processingAudio');
+            if (audio) {
+                audio.pause();
+                audio.currentTime = 0;
+            }
+            stopTimer();
+        }
+
+        function startTimer() {
+            const timerDiv = document.getElementById('elapsedTimer');
+            const timerSpan = document.getElementById('timerSeconds');
+            if (!timerDiv || !timerSpan) return;
+
+            timerDiv.style.display = 'block';
+            timerSpan.innerText = '0';
+            startTime = Date.now();
+
+            if (timerInterval) clearInterval(timerInterval);
+            timerInterval = setInterval(() => {
+                const elapsed = Math.round((Date.now() - startTime) / 1000);
+                timerSpan.innerText = elapsed;
+            }, 1000);
+        }
+
+        function stopTimer() {
+            const timerDiv = document.getElementById('elapsedTimer');
+            if (timerDiv) timerDiv.style.display = 'none';
+            if (timerInterval) {
+                clearInterval(timerInterval);
+                timerInterval = null;
             }
         }
         let vadContext = null;
@@ -1194,6 +1252,10 @@ LiveKit SFU → Browser playback
             socket.on('status', (data) => {
                 if (data && data.message) {
                     showStatus(data.message, 'info');
+                    // Check for processing/transcribing status to start audio
+                    if (data.message.includes('Processing') || data.message.includes('Transcribing')) {
+                        startProcessingAudio();
+                    }
                 }
             });
 
@@ -1230,6 +1292,9 @@ LiveKit SFU → Browser playback
             }
             if (icon) icon.className = 'fas fa-microphone';
             if (label) label.textContent = 'Click to speak';
+
+            // Also stop processing if we reset
+            stopProcessingAudio();
         }
 
         async function startRecording(options = {}) {
@@ -1298,6 +1363,9 @@ LiveKit SFU → Browser playback
             isRecording = false;
             isProcessing = true;
             processingStartedAt = Date.now();  // Track when processing started
+
+            // Start processing audio/timer immediately when recording stops
+            startProcessingAudio();
             const button = document.getElementById('micButton');
             const icon = document.getElementById('micIcon');
             const label = document.getElementById('micLabel');

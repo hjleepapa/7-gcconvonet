@@ -228,17 +228,6 @@
         <div id="voiceSection" style="display: none;">
             <div class="status-message" id="statusMessage"></div>
 
-            <!-- Elapsed Timer -->
-            <div id="elapsedTimer"
-                style="display: none; text-align: center; margin-bottom: 20px; font-weight: bold; color: #764ba2;">
-                Processing: <span id="timerSeconds">0</span>s
-            </div>
-
-            <!-- Hidden Audio for Processing Loop -->
-            <audio id="processingAudio" loop>
-                <source src="/static/assets/audio/processing.mp3" type="audio/mpeg">
-            </audio>
-
             <div class="voice-controls">
                 <button class="mic-button" id="micButton" onclick="toggleRecording()" disabled>
                     <i class="fas fa-microphone" id="micIcon"></i>
@@ -288,8 +277,6 @@
         let audioContext = null;
         let analyser = null;
         let visualizerInterval = null;
-        let timerInterval = null;
-        let startTime = null;
 
         // Streaming audio queue (global scope)
         let audioChunkQueue = [];
@@ -329,51 +316,6 @@
             currentAudioSource = null;
             if (audioContext) {
                 audioContext.suspend().then(() => audioContext.resume()).catch(() => { });
-            }
-
-            // Also stop processing audio
-            stopProcessingAudio();
-        }
-
-        function startProcessingAudio() {
-            const audio = document.getElementById('processingAudio');
-            if (audio) {
-                audio.play().catch(e => console.warn('⚠️ Could not play processing audio:', e));
-            }
-            startTimer();
-        }
-
-        function stopProcessingAudio() {
-            const audio = document.getElementById('processingAudio');
-            if (audio) {
-                audio.pause();
-                audio.currentTime = 0;
-            }
-            stopTimer();
-        }
-
-        function startTimer() {
-            const timerDiv = document.getElementById('elapsedTimer');
-            const timerSpan = document.getElementById('timerSeconds');
-            if (!timerDiv || !timerSpan) return;
-
-            timerDiv.style.display = 'block';
-            timerSpan.innerText = '0';
-            startTime = Date.now();
-
-            if (timerInterval) clearInterval(timerInterval);
-            timerInterval = setInterval(() => {
-                const elapsed = Math.round((Date.now() - startTime) / 1000);
-                timerSpan.innerText = elapsed;
-            }, 1000);
-        }
-
-        function stopTimer() {
-            const timerDiv = document.getElementById('elapsedTimer');
-            if (timerDiv) timerDiv.style.display = 'none';
-            if (timerInterval) {
-                clearInterval(timerInterval);
-                timerInterval = null;
             }
         }
 
@@ -498,13 +440,11 @@
                     }
 
                     resetMicButton();
-                    stopProcessingAudio();
                     console.log('✅ agent_response event processed successfully');
                 } else {
                     console.log('❌ Response failed or invalid:', data);
                     showStatus('Error getting response', 'error');
                     resetMicButton();
-                    stopProcessingAudio();
                 }
             };
 
@@ -616,12 +556,11 @@
                 console.log('📊 Status update:', data.message);
                 showStatus(data.message, 'info');
                 // Keep processing state active during status updates
-                if (data.message && (data.message.includes('Processing') || data.message.includes('Transcribing'))) {
+                if (data.message && (data.message.includes('Processing') || data.message.includes('Generating'))) {
                     if (!isProcessing) {
                         isProcessing = true;
                         console.log('🔄 Setting isProcessing=true due to status update');
                     }
-                    startProcessingAudio();
                 }
             });
 
@@ -682,9 +621,6 @@
                     if (!isPlayingAudioChunks) {
                         playAudioChunksSequentially();
                     }
-
-                    // Stop processing audio as soon as real response starts
-                    stopProcessingAudio();
                 }
             });
 
@@ -717,7 +653,6 @@
             socket.on('error', (data) => {
                 showStatus(data.message, 'error');
                 resetMicButton();
-                stopProcessingAudio();
             });
 
             socket.on('transfer_initiated', (data) => {
@@ -793,8 +728,6 @@
         async function toggleRecording() {
             if (isRecording) {
                 stopRecording();
-                // Start processing audio/timer immediately when recording stops
-                startProcessingAudio();
             } else {
                 await startRecording();
             }
