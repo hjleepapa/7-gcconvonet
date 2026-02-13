@@ -133,8 +133,8 @@ class CartesiaService:
             voice_id = voice_id or self.voice_id
             print(f"🔊 CartesiaService.synthesize_stream: Starting for text: {text[:50]}... (voice: {voice_id})", flush=True)
             
-            # Use the SDK's bytes method with stream=True for better stability
-            chunk_iter = self.client.tts.bytes(
+            # Use the SDK's iter_bytes method for streaming audio chunks
+            chunk_iter = self.client.tts.iter_bytes(
                 model_id=self.model_id,
                 transcript=text,
                 voice={
@@ -145,8 +145,7 @@ class CartesiaService:
                     "container": "raw",
                     "encoding": "pcm_s16le", # PCM 16-bit little-endian
                     "sample_rate": 44100
-                },
-                stream=True
+                }
             )
             
             chunk_count = 0
