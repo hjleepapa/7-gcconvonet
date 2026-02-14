@@ -307,8 +307,9 @@
             </div>
 
             <!-- Hidden Audio for Processing Loop -->
-            <audio id="processingAudio" loop>
+            <audio id="processingAudio" loop preload="auto">
                 <source src="/static/assets/audio/processing.mp3" type="audio/mpeg">
+                Your browser does not support the audio element.
             </audio>
             <div class="debug-panel" id="livekitDebugPanel" style="display: none;">
                 <div><strong>LiveKit Debug</strong></div>
@@ -485,16 +486,26 @@ LiveKit SFU → Browser playback
             if (!processingAudioObj) {
                 processingAudioObj = new Audio('/static/assets/audio/processing.mp3');
                 processingAudioObj.loop = true;
+                processingAudioObj.volume = 0.5; // Set volume to 50% to avoid being too loud
+                processingAudioObj.currentTime = 0; // Start from beginning
             }
 
             processingAudioObj.play()
                 .then(() => console.log('🔊 Processing audio playing successfully'))
                 .catch(e => {
-                    console.warn('⚠️ Could not play processing audio:', e);
-                    // Fallback to trying the element if object fails
+                    console.warn('⚠️ Could not play processing audio from object:', e);
+                    // Fallback to trying the HTML element if object fails
                     const audioElem = document.getElementById('processingAudio');
                     if (audioElem) {
-                        audioElem.play().catch(err => console.error('❌ Failed audio element fallback:', err));
+                        audioElem.volume = 0.5;
+                        audioElem.currentTime = 0;
+                        audioElem.play().catch(err => {
+                            console.error('❌ Failed audio element fallback:', err);
+                            // Try one more time with a slight delay
+                            setTimeout(() => {
+                                audioElem.play().catch(e => console.warn('❌ Final audio attempt failed:', e));
+                            }, 100);
+                        });
                     }
                 });
             startTimer();
@@ -502,15 +513,25 @@ LiveKit SFU → Browser playback
 
         function stopProcessingAudio() {
             console.log('🔇 stopProcessingAudio() called');
-            if (processingAudioObj) {
-                processingAudioObj.pause();
-                processingAudioObj.currentTime = 0;
+            try {
+                if (processingAudioObj) {
+                    processingAudioObj.pause();
+                    processingAudioObj.currentTime = 0;
+                }
+            } catch (e) {
+                console.warn('⚠️ Error stopping processing audio object:', e);
             }
-            const audioElem = document.getElementById('processingAudio');
-            if (audioElem) {
-                audioElem.pause();
-                audioElem.currentTime = 0;
+            
+            try {
+                const audioElem = document.getElementById('processingAudio');
+                if (audioElem) {
+                    audioElem.pause();
+                    audioElem.currentTime = 0;
+                }
+            } catch (e) {
+                console.warn('⚠️ Error stopping audio element:', e);
             }
+            
             stopTimer();
         }
 
@@ -1323,14 +1344,15 @@ LiveKit SFU → Browser playback
             const skipMicEnable = options.skipMicEnable || false;
             const silentUI = options.silentUI || false;
 
-            // Unlock/Initialize processing audio on user interaction
+            // Initialize processing audio on first user interaction (browser autoplay policy)
             if (!processingAudioObj) {
-                console.log('🔓 Initializing processing audio object on user interaction');
+                console.log('🔓 Initializing processing audio on user interaction');
                 processingAudioObj = new Audio('/static/assets/audio/processing.mp3');
                 processingAudioObj.loop = true;
                 processingAudioObj.volume = 0.5;
-                // Pre-load it
+                // Pre-load the audio file
                 processingAudioObj.load();
+                console.log('✅ Processing audio object initialized and pre-loaded');
             }
 
             if (!socket || !socket.connected) {

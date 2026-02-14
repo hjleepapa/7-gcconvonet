@@ -10,13 +10,9 @@ class CallCenterAgent {
         this.currentCall = null;
         this.currentSession = null;
         this.pendingDialNumber = null;
-        this.pendingTransferSession = null;
-        this.pendingTransferCall = null;
-        this.pendingTransferIdentity = null;
         this.localStream = null;
         this.audioAccessDenied = false;
         this.answerInProgress = false;
-        this.customerInfoPinned = false;
         this.iceServers = [
             { urls: 'stun:136.115.41.45:3478' },
             {
@@ -47,11 +43,6 @@ class CallCenterAgent {
         this.callStartTime = null;
         this.activeCallSessionId = null;
         this.activeCallIdentity = null;
-        this.lastInviteTime = null;
-        this.lastInviteCaller = null;
-        this.isHandlingTransfer = false;
-        this.transferTimeoutId = null;
-        this.lastProcessedTransferId = null;
 
         this.init();
     }
@@ -109,11 +100,13 @@ class CallCenterAgent {
         this.customerData = document.getElementById('customerData');
         this.closeCustomerPopup = document.getElementById('closeCustomerPopup');
         this.acceptCallFromPopup = document.getElementById('acceptCallFromPopup');
+        this.customerPopupContent = this.customerPopup ? this.customerPopup.querySelector('.modal-content') : null;
 
         // Customer info window (read-only, persistent during call)
         this.customerInfoWindow = document.getElementById('customerInfoWindow');
         this.customerInfoData = document.getElementById('customerInfoData');
         this.closeCustomerInfoWindow = document.getElementById('closeCustomerInfoWindow');
+        this.customerInfoWindowContent = this.customerInfoWindow ? this.customerInfoWindow.querySelector('.modal-content') : null;
 
         // Audio
         this.ringTone = document.getElementById('ringTone');
@@ -162,16 +155,15 @@ class CallCenterAgent {
         // Customer popup
         this.closeCustomerPopup.addEventListener('click', () => this.hideCustomerPopup());
         this.acceptCallFromPopup.addEventListener('click', () => {
-            this.acceptCallFromPopup.disabled = true;
-            this.customerInfoPinned = true;
-            this.showCustomerInfoWindow();
+            // Close popup and open read-only info window when accepting call
+            const customerData = this.customerData.innerHTML;
+            this.hideCustomerPopup();
+            this.showCustomerInfoWindow(customerData);
             this.answerCall();
         });
 
-        // Customer info window
-        if (this.closeCustomerInfoWindow) {
-            this.closeCustomerInfoWindow.addEventListener('click', () => this.hideCustomerInfoWindow());
-        }
+        // Customer info window (read-only)
+        this.closeCustomerInfoWindow.addEventListener('click', () => this.hideCustomerInfoWindow());
 
         // Initialize drag and resize functionality
         this.initModalDragAndResize();
@@ -633,62 +625,34 @@ class CallCenterAgent {
     }
 
     handleIncomingCall(session) {
-        console.log('Incoming call start:', {
-            sessionId: session.id,
-            direction: session.direction,
-            state: session.state
-        });
-
+        console.log('Incoming call:', session);
+        
         const incomingIdentity = this.extractSessionIdentity(session);
-        const remoteIdentity = session.remote_identity;
-        const callerNumber = remoteIdentity && remoteIdentity.uri ? remoteIdentity.uri.user : null;
-        const callerName = remoteIdentity && remoteIdentity.display_name ? remoteIdentity.display_name : callerNumber;
         const hasActiveCall = this.activeCallSessionId && this.activeCallSessionId !== session.id;
-
+        
         if (hasActiveCall && this.isReinviteForActiveCall(incomingIdentity)) {
             this.handleReinviteSession(session, incomingIdentity);
             return;
         }
-
-        // Check if this is a transfer/replacement call
-        if (hasActiveCall && this.isTransferCall(session, incomingIdentity)) {
-            console.log('🔄 Detected transfer/replacement call during active call. Replacing current session...', {
-                activeSession: this.activeCallSessionId,
-                newSession: session.id,
-                identity: incomingIdentity
-            });
-            this.handleTransferCall(session, incomingIdentity, callerName, callerNumber);
-
-            // Update tracking after successful detection/handling
-            this.lastInviteTime = Date.now();
-            this.lastInviteCaller = callerNumber;
-            return;
-        }
-
-        if (hasActiveCall && this.shouldReplacePendingSession(session, incomingIdentity, callerNumber)) {
-            this.replacePendingSession(session, incomingIdentity, callerName, callerNumber);
-            this.lastInviteTime = Date.now();
-            this.lastInviteCaller = callerNumber;
-            return;
-        }
-
+        
         if (hasActiveCall) {
             this.handleParallelInviteDuringActiveCall(session, incomingIdentity);
-            this.lastInviteTime = Date.now();
-            this.lastInviteCaller = callerNumber;
             return;
         }
-
-        // Extract call identifiers from session
-        const identity = this.extractSessionIdentity(session);
-        const callId = identity.callId || session.id; // Use identity.callId if available, fallback to session.id
-        const callSid = identity.twilioCallSid;
-
+        
+        const remoteIdentity = session.remote_identity;
+        const callerNumber = remoteIdentity.uri.user;
+        const callerName = remoteIdentity.display_name || callerNumber;
+        
+        // Generate call ID
+        const callId = session.id;
+        
         // Mock customer data (in production, fetch from CRM)
         const customerId = callerNumber;
-
+        
         this.currentSession = session;
         this.activeCallSessionId = session.id;
+        this.firstCallTimestamp = Date.now(); // Track when first call arrives for Dial leg detection
         this.currentCall = {
             call_id: callId,
             caller_number: callerNumber,
@@ -697,39 +661,42 @@ class CallCenterAgent {
             direction: 'inbound'
         };
         this.activeCallIdentity = incomingIdentity;
-
+        
         // Notify backend
         fetch('/call-center/api/call/ringing', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(this.currentCall)
         });
-
+        
         // Update UI
         this.showIncomingCall(callerName, callerNumber);
-        this.enableAnswerControls();
-
-        // Show customer popup with call identifiers
-        this.showCustomerPopup(customerId, callSid, callId);
-
-        // Play ringtone with safety
-        try {
-            console.log('Attempting to play ringtone...');
-            const playPromise = this.ringTone.play();
-            if (playPromise !== undefined) {
-                playPromise.catch(error => {
-                    console.warn('Ringtone play prevented or failed:', error);
+        
+        // Show customer popup
+        this.showCustomerPopup(customerId);
+        
+        // Play ringtone (with error handling for autoplay restrictions)
+        if (this.ringTone) {
+            // Ensure ringtone is loaded and ready
+            if (this.ringTone.readyState >= 2) { // HAVE_CURRENT_DATA or higher
+                this.ringTone.play().catch(error => {
+                    console.warn('Ringtone autoplay prevented:', error);
+                    // Try to play when user interacts (e.g., clicks accept button)
                 });
+            } else {
+                // Wait for ringtone to load
+                this.ringTone.addEventListener('canplay', () => {
+                    this.ringTone.play().catch(error => {
+                        console.warn('Ringtone autoplay prevented after load:', error);
+                    });
+                }, { once: true });
+                this.ringTone.load(); // Force load
             }
-        } catch (error) {
-            console.warn('Error calling ringTone.play():', error);
+        } else {
+            console.warn('Ringtone audio element not found');
         }
-
+        
         this.attachSessionEventHandlers(session, 'inbound');
-
-        // Track this invite as the last one processed
-        this.lastInviteTime = Date.now();
-        this.lastInviteCaller = callerNumber;
     }
 
     extractSessionIdentity(session) {
@@ -737,30 +704,48 @@ class CallCenterAgent {
             return { callId: null, twilioCallSid: null, fromTag: null };
         }
         const request = session.request || {};
+        
+        // Try multiple ways to get headers (JsSIP may store them differently)
         const getHeader = typeof request.getHeader === 'function'
-            ? request.getHeader.bind(request)
-            : () => null;
-        const getHeaderFallback = (headerName) => {
-            if (!request.headers) {
+            ? (name) => request.getHeader(name)
+            : (name) => {
+                // Try accessing headers directly
+                if (request.headers) {
+                    const header = Array.isArray(request.headers)
+                        ? request.headers.find(h => h.name && h.name.toLowerCase() === name.toLowerCase())
+                        : request.headers[name] || request.headers[name.toLowerCase()];
+                    return header ? (header.value || header) : null;
+                }
+                // Try case-insensitive property access
+                const lowerName = name.toLowerCase();
+                for (const key in request) {
+                    if (key.toLowerCase() === lowerName) {
+                        return request[key];
+                    }
+                }
                 return null;
-            }
-            const key = headerName.toLowerCase();
-            const entries = request.headers[key];
-            if (!entries || !entries.length) {
-                return null;
-            }
-            const entry = entries[0];
-            if (typeof entry === 'string') {
-                return entry;
-            }
-            return entry.raw || entry.parsed || entry.value || null;
-        };
-        const twilioCallSid = getHeader('X-Twilio-CallSid') || getHeaderFallback('X-Twilio-CallSid');
-        return {
-            callId: request.call_id || request.callId || session.id,
+            };
+        
+        const twilioCallSid = getHeader('X-Twilio-CallSid') || getHeader('x-twilio-callsid');
+        const callId = request.call_id || request.callId || session.id;
+        const fromTag = request.from_tag || null;
+        
+        const identity = {
+            callId: callId,
             twilioCallSid: twilioCallSid,
-            fromTag: request.from_tag || null
+            fromTag: fromTag
         };
+        
+        console.log('Extracted session identity:', {
+            sessionId: session.id,
+            callId: identity.callId,
+            twilioCallSid: identity.twilioCallSid,
+            fromTag: identity.fromTag,
+            hasRequest: !!request,
+            requestKeys: request ? Object.keys(request).slice(0, 10) : []
+        });
+        
+        return identity;
     }
 
     isReinviteForActiveCall(identity) {
@@ -810,439 +795,150 @@ class CallCenterAgent {
         }
     }
 
-    isTransferCall(session, identity) {
-        // A transfer/replacement call is identified by:
-        // 1. We have an active or pending call
-        if (!this.activeCallSessionId) {
-            return false;
-        }
-
-        const normalizeNumber = (num) => {
-            if (!num) return null;
-            // Remove everything except digits
-            return num.toString().replace(/\D/g, '').slice(-10); // Match last 10 digits
-        };
-
-        // 2. It's a different call (different Call-ID)
-        const currentCallId = this.activeCallIdentity ? this.activeCallIdentity.callId : null;
-        const incomingCallId = identity ? identity.callId : null;
-
-        console.log('Checking for transfer:', {
-            incomingCallId: incomingCallId,
-            currentCallId: currentCallId,
-            activeSession: this.activeCallSessionId
-        });
-
-        if (incomingCallId && currentCallId && incomingCallId === currentCallId) {
-            console.log('Same Call-ID, not a transfer.');
-            return false; // Same call, not a transfer
-        }
-
-        // 3. Cooldown check: If this caller sent an invite very recently, it's likely a duplicate/retry leg
-        // rather than a transfer. Transfers usually happen after some time or have different SIDs.
-        const now = Date.now();
-        const INVITE_COOLDOWN_MS = 5000; // 5 seconds
-        const normIncomingCaller = normalizeNumber(incomingCaller);
-        const normLastCaller = normalizeNumber(this.lastInviteCaller);
-
-        if (this.lastInviteTime && (now - this.lastInviteTime < INVITE_COOLDOWN_MS) &&
-            normIncomingCaller && normIncomingCaller === normLastCaller) {
-            console.log('Invite cooldown active for caller. Treating as parallel leg, not transfer:', normIncomingCaller);
-            return false;
-        }
-
-        // 3. Hints that it's a transfer/replacement:
-        // - Has Twilio Call SID (specific to our Twilio integration)
-        if (identity && identity.twilioCallSid) {
-            console.log('Detected transfer by Twilio Call SID:', identity.twilioCallSid);
-            return true;
-        }
-
-        // - Is from the same caller (common for call replacement/re-dialing)
-        const remoteIdentity = session.remote_identity;
-        const incomingCaller = remoteIdentity && remoteIdentity.uri ? remoteIdentity.uri.user : null;
-        const activeCaller = this.currentCall ? this.currentCall.caller_number : null;
-
-        const normIncoming = normalizeNumber(incomingCaller);
-        const normActive = normalizeNumber(activeCaller);
-
-        console.log('Comparing caller numbers for transfer detection:', {
-            incoming: incomingCaller,
-            active: activeCaller,
-            normIncoming: normIncoming,
-            normActive: normActive
-        });
-
-        if (normIncoming && normActive && normIncoming === normActive) {
-            console.log('Detected transfer by normalized caller number match.');
-            return true;
-        }
-
-        return false;
-    }
-
-    async handleTransferCall(session, identity, callerName, callerNumber) {
-        console.log('Handling transfer call (manual answer):', {
-            transferSession: session.id,
-            transferIdentity: identity,
-            activeSession: this.activeCallSessionId
-        });
-
-        // GUARD: Prevent duplicate transfer handling for the same call
-        const transferId = identity.callId || session.id;
-        if (this.isHandlingTransfer || this.lastProcessedTransferId === transferId) {
-            console.warn('Transfer already being handled or duplicate event for:', transferId);
-            return;
-        }
-
-        this.isHandlingTransfer = true;
-        this.lastProcessedTransferId = transferId;
-
-        // Store the original call session for later termination
-        const originalSession = this.currentSession;
-        const originalCallSessionId = this.activeCallSessionId;
-        const originalCall = { ...this.currentCall };
-
-        const callId = identity.callId || session.id;
-        const callSid = identity.twilioCallSid;
-
-        // Store transfer call as pending (do NOT set as currentSession yet)
-        this.pendingTransferSession = session;
-        this.pendingTransferCall = {
-            call_id: callId,
-            caller_number: callerNumber,
-            caller_name: callerName,
-            customer_id: callerNumber,
-            direction: 'transfer'
-        };
-        this.pendingTransferIdentity = identity;
-
-        console.log('Transfer call held as PENDING:', {
-            pendingSessionId: session.id,
-            pendingCallId: callId,
-            originalSessionId: originalSession?.id
-        });
-
-        // Notify backend about pending transfer
-        fetch('/call-center/api/call/ringing', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(this.pendingTransferCall)
-        });
-
-        // Show customer popup for transfer call
-        const customerId = callerNumber;
-        this.showCustomerPopup(customerId, callSid, callId);
-
-        // Show transfer prompt UI (instead of replacing immediately)
-        this.showTransferPrompt(
-            session,
-            originalSession,
-            callerName,
-            callerNumber,
-            () => this.acceptTransferCall(session, originalSession),
-            () => this.rejectTransferCall(session)
-        );
-
-        // Set a timeout for transfer acceptance (30 seconds)
-        if (this.transferTimeoutId) clearTimeout(this.transferTimeoutId);
-        this.transferTimeoutId = setTimeout(() => {
-            if (this.pendingTransferSession) {
-                console.log('Transfer acceptance timeout - auto-rejecting');
-                this.rejectTransferCall(session);
-            }
-        }, 30000);
-
-        // Attach event handlers to pending session
-        this.attachSessionEventHandlers(session, 'pending-transfer');
-    }
-
-    showTransferPrompt(newSession, oldSession, callerName, callerNumber, onAccept, onReject) {
-        // Remove any existing transfer notification first to prevent duplicates
-        const existingAlert = document.querySelector('.transfer-notification');
-        if (existingAlert) {
-            console.log('Removing existing transfer notification');
-            existingAlert.remove();
-        }
-
-        console.log('Showing transfer prompt:', { newCaller: callerName, oldCallActive: !!oldSession });
-        
-        // Create a comprehensive transfer prompt showing both calls clearly
-        const transferNotification = document.createElement('div');
-        transferNotification.className = 'transfer-notification';
-        transferNotification.id = 'transferNotificationPrompt';
-        
-        // Get current call info to display
-        const currentCallInfo = oldSession ? 
-            `<div class="current-call-info">
-                <p><strong>Current Call:</strong> ${this.currentCall?.caller_name || 'Unknown'} (${this.currentCall?.caller_number || 'Unknown'})</p>
-            </div>` : '';
-        
-        transferNotification.innerHTML = `
-            <div class="transfer-alert">
-                <h3>📞 Incoming Call Transfer</h3>
-                ${currentCallInfo}
-                <div class="incoming-call-info">
-                    <p><strong>Transfer From:</strong> <span style="color: #ff6b35; font-size: 1.1em;">${callerName}</span> (${callerNumber})</p>
-                </div>
-                <p style="font-size: 0.9em; color: #666; margin: 10px 0;">Accept to answer the transfer call, or reject to keep current call</p>
-                <div class="transfer-buttons">
-                    <button class="accept-transfer-btn" id="acceptTransferBtn">✓ Accept Transfer</button>
-                    <button class="reject-transfer-btn" id="rejectTransferBtn">✕ Reject</button>
-                </div>
-            </div>
-        `;
-        
-        // Append to customer popup if it exists
-        if (this.customerPopup) {
-            this.customerPopup.classList.add('active');
-            // Remove any old transfer notifications
-            const oldNotifications = this.customerPopup.querySelectorAll('.transfer-notification');
-            oldNotifications.forEach(n => n.remove());
-            this.customerPopup.insertBefore(transferNotification, this.customerPopup.firstChild);
-        }
-        
-        // Attach button handlers (with proper event delegation to avoid duplicates)
-        const acceptBtn = transferNotification.querySelector('.accept-transfer-btn');
-        const rejectBtn = transferNotification.querySelector('.reject-transfer-btn');
-        
-        let handled = false; // Flag to prevent double-handling
-        
-        if (acceptBtn) {
-            acceptBtn.addEventListener('click', (e) => {
-                e.preventDefault();
-                e.stopImmediatePropagation();
-                if (!handled) {
-                    handled = true;
-                    console.log('Accept transfer button clicked');
-                    transferNotification.remove();
-                    onAccept();
-                }
-            });
-        }
-        
-        if (rejectBtn) {
-            rejectBtn.addEventListener('click', (e) => {
-                e.preventDefault();
-                e.stopImmediatePropagation();
-                if (!handled) {
-                    handled = true;
-                    console.log('Reject transfer button clicked');
-                    transferNotification.remove();
-                    onReject();
-                }
-            });
-        }
-    }
-
-    acceptTransferCall(newSession, oldSession) {
-        console.log('Accepting transfer call:', {
-            newSessionId: newSession?.id,
-            oldSessionId: oldSession?.id
-        });
-
-        if (!newSession) {
-            console.error('New session is null, cannot accept transfer');
-            return;
-        }
-
-        // Clear the transfer timeout if any
-        if (this.transferTimeoutId) {
-            clearTimeout(this.transferTimeoutId);
-            this.transferTimeoutId = null;
-        }
-
-        // Now we can safely replace the current session with the pending transfer
-        this.currentSession = newSession;
-        this.currentCall = this.pendingTransferCall;
-        this.activeCallSessionId = newSession.id;
-        this.activeCallIdentity = this.pendingTransferIdentity;
-
-        // Terminate the old call NOW (after new call is set as current)
-        if (oldSession) {
-            console.log('Terminating original call after transfer acceptance:', {
-                oldSessionId: oldSession.id
-            });
-            try {
-                if (typeof oldSession.terminate === 'function') {
-                    oldSession.terminate();
-                }
-            } catch (terminateError) {
-                console.warn('Error terminating old call:', terminateError);
-            }
-        }
-
-        // Update UI to reflect the transfer
-        this.showIncomingCall(this.pendingTransferCall.caller_name, this.pendingTransferCall.caller_number);
-        this.enableAnswerControls();
-
-        // Call initiate UI update
-        this.updateCallDisplay('Transfer call accepted - ready to answer');
-
-        // Play ringtone to indicate transfer is ready
-        try {
-            console.log('Playing ringtone for accepted transfer call...');
-            const playPromise = this.ringTone.play();
-            if (playPromise !== undefined) {
-                playPromise.catch(error => {
-                    console.warn('Ringtone play prevented or failed (transfer accept):', error);
-                });
-            }
-        } catch (error) {
-            console.warn('Error playing ringtone:', error);
-        }
-
-        // Clear transfer handling flags
-        this.isHandlingTransfer = false;
-        
-        // Clear pending transfer data
-        this.pendingTransferSession = null;
-        this.pendingTransferCall = null;
-        this.pendingTransferIdentity = null;
-    }
-
-    rejectTransferCall(session) {
-        console.log('Rejecting transfer call:', { sessionId: session?.id });
-
-        // Clear the transfer timeout if any
-        if (this.transferTimeoutId) {
-            clearTimeout(this.transferTimeoutId);
-            this.transferTimeoutId = null;
-        }
-
-        // Remove transfer notification from UI
-        const transferNotif = document.getElementById('transferNotificationPrompt');
-        if (transferNotif) {
-            transferNotif.remove();
-        }
-
-        // Terminate the transfer session
-        if (session) {
-            try {
-                if (typeof session.terminate === 'function') {
-                    session.terminate();
-                }
-            } catch (error) {
-                console.warn('Error terminating rejected transfer call:', error);
-            }
-        }
-
-        // Clear transfer handling flags
-        this.isHandlingTransfer = false;
-        
-        // Clear pending transfer data
-        this.pendingTransferSession = null;
-        this.pendingTransferCall = null;
-        this.pendingTransferIdentity = null;
-
-        // Restore UI to show active call
-        if (this.currentCall) {
-            this.showIncomingCall(this.currentCall.caller_name, this.currentCall.caller_number);
-        }
-    }
-
     handleParallelInviteDuringActiveCall(session, identity) {
+        // Check if this is a Dial leg from Twilio (second INVITE with different Call SID)
+        // In Twilio transfers, the Dial leg has a different Call SID but is part of the same transfer
+        // We should answer this call and replace the current session
+        
+        // Criteria for Dial leg detection (works even if Twilio Call SIDs are not available):
+        // 1. Different Call-IDs (different SIP sessions) - REQUIRED
+        // 2. Arrives when there's already an active call - REQUIRED (we're in this function)
+        // 3. Arrives within 60 seconds of the first call - REQUIRED
+        // 4. If Twilio Call SIDs are available, they should be different (optional check)
+        // 5. Both are inbound calls to extension 2001 (implicit - we're receiving them)
+        
+        const differentCallIds = identity.callId && this.activeCallIdentity.callId && 
+                                 identity.callId !== this.activeCallIdentity.callId;
+        const timeSinceFirstCall = Date.now() - (this.firstCallTimestamp || Date.now());
+        const withinTimeWindow = timeSinceFirstCall < 60000; // 60 seconds (increased from 10)
+        
+        // Optional: Check Twilio Call SIDs if available
+        const hasTwilioCallSids = identity.twilioCallSid && this.activeCallIdentity.twilioCallSid;
+        const differentCallSids = hasTwilioCallSids && 
+                                  identity.twilioCallSid !== this.activeCallIdentity.twilioCallSid;
+        
+        // Dial leg detection: Different Call-IDs + within time window
+        // If Twilio Call SIDs are available, they should also be different
+        const isDialLeg = differentCallIds && withinTimeWindow && 
+                         (!hasTwilioCallSids || differentCallSids);
+        
+        console.log('🔍 Dial leg detection check:', {
+            hasTwilioCallSids,
+            differentCallSids,
+            differentCallIds,
+            withinTimeWindow,
+            timeSinceFirstCall: `${timeSinceFirstCall}ms`,
+            isDialLeg,
+            incomingIdentity: identity,
+            activeIdentity: this.activeCallIdentity,
+            firstCallTimestamp: this.firstCallTimestamp,
+            currentTime: Date.now(),
+            currentAnswerBtnDisabled: this.answerBtn.disabled,
+            currentPopupBtnDisabled: this.acceptCallFromPopup ? this.acceptCallFromPopup.disabled : 'N/A'
+        });
+        
+        if (isDialLeg) {
+            console.log('✅ Detected Dial leg from Twilio transfer. Switching to Dial leg session.', {
+                activeSession: this.activeCallSessionId,
+                activeCallSid: this.activeCallIdentity.twilioCallSid,
+                activeCallId: this.activeCallIdentity.callId,
+                incomingSession: session.id,
+                incomingCallSid: identity.twilioCallSid,
+                incomingCallId: identity.callId,
+                timeSinceFirstCall: `${timeSinceFirstCall}ms`
+            });
+            
+            // CRITICAL: Do NOT terminate the old session!
+            // Terminating the first call causes FusionPBX/Twilio to cancel the Dial leg.
+            // Instead, we keep the old session alive and just switch to the Dial leg.
+            // The old session will naturally end when the Dial leg is answered and established.
+            const oldSession = this.currentSession;
+            if (oldSession && oldSession.id !== session.id) {
+                console.log('Keeping old session alive (not terminating) to prevent Dial leg cancellation', {
+                    oldSessionId: oldSession.id,
+                    oldSessionStatus: oldSession.status
+                });
+                // Store reference to old session but don't terminate it
+                // It will be cleaned up when the Dial leg is established
+            }
+            
+            // Replace the current session with the Dial leg BEFORE attaching handlers
+            // This ensures onCallEstablished checks the correct session
+            this.currentSession = session;
+            this.activeCallSessionId = session.id;
+            this.activeCallIdentity = identity;
+            
+            // Reset call state to ensure Answer button can be enabled
+            this.answerInProgress = false;
+            
+            // Update UI to show incoming call for the Dial leg FIRST
+            // This enables the Answer button immediately
+            const remoteIdentity = session.remote_identity;
+            const callerNumber = remoteIdentity.uri.user;
+            const callerName = remoteIdentity.display_name || callerNumber;
+            this.showIncomingCall(callerName, callerNumber);
+            
+            // Force enable Answer button (showIncomingCall should do this, but be explicit)
+            this.answerBtn.disabled = false;
+            if (this.acceptCallFromPopup) {
+                this.acceptCallFromPopup.disabled = false;
+            }
+            console.log('✅ Answer button enabled for Dial leg', {
+                sessionId: session.id,
+                sessionStatus: session.status,
+                answerBtnDisabled: this.answerBtn.disabled,
+                popupBtnDisabled: this.acceptCallFromPopup ? this.acceptCallFromPopup.disabled : 'N/A'
+            });
+            
+            // CRITICAL: Attach event handlers IMMEDIATELY to ensure 180 Ringing is sent
+            // This prevents FusionPBX from canceling the Dial leg due to timeout
+            this.attachSessionEventHandlers(session, 'inbound');
+            
+            // CRITICAL: Auto-answer the Dial leg immediately to prevent FusionPBX from canceling it
+            // FusionPBX will cancel the Dial leg if it's not answered quickly, especially if
+            // the first call is already established. By auto-answering, we ensure the Dial leg
+            // is connected before FusionPBX has a chance to cancel it.
+            console.log('Auto-answering Dial leg to prevent cancellation', {
+                sessionId: session.id,
+                sessionStatus: session.status
+            });
+            
+            // If popup is open, copy customer data to info window before auto-answering
+            if (this.customerPopup.classList.contains('active') && this.customerData.innerHTML && !this.customerData.innerHTML.includes('loading')) {
+                const customerDataHtml = this.customerData.innerHTML;
+                this.hideCustomerPopup();
+                this.showCustomerInfoWindow(customerDataHtml);
+            }
+            
+            // Auto-answer the Dial leg immediately
+            this.answerCall().catch(error => {
+                console.error('Failed to auto-answer Dial leg', error);
+                // If auto-answer fails, at least the Answer button is enabled for manual answer
+            });
+            
+            // Show popup again if it's not already shown (in case it was closed)
+            if (this.currentCall && this.currentCall.customer_id) {
+                this.showCustomerPopup(this.currentCall.customer_id);
+            }
+            
+            return;
+        }
+        
         console.warn('Already handling an active call. Ignoring parallel incoming session.', {
             activeSession: this.activeCallSessionId,
             incomingSession: session.id,
             incomingIdentity: identity,
-            activeIdentity: this.activeCallIdentity
+            activeIdentity: this.activeCallIdentity,
+            isDialLeg: false,
+            reasons: {
+                hasTwilioCallSids,
+                differentCallSids,
+                differentCallIds,
+                withinTimeWindow
+            }
         });
-        if (this.isSessionPending(this.currentSession)) {
-            this.enableAnswerControls();
-        }
         session.on('failed', () => console.log('Ignored parallel session failed', session.id));
         session.on('ended', () => console.log('Ignored parallel session ended', session.id));
-    }
-
-    isSessionPending(session) {
-        if (!session) {
-            return false;
-        }
-        if (typeof session.isEstablished === 'function' && session.isEstablished()) {
-            return false;
-        }
-        if (typeof session.isEnded === 'function' && session.isEnded()) {
-            return false;
-        }
-        const status = session.status;
-        if (typeof JsSIP !== 'undefined' && JsSIP.RTCSession && JsSIP.RTCSession.C) {
-            const C = JsSIP.RTCSession.C;
-            if (status === C.STATUS_CONFIRMED || status === C.STATUS_TERMINATED) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    shouldReplacePendingSession(session, identity, callerNumber) {
-        if (!this.currentSession || !this.currentCall) {
-            return false;
-        }
-        if (!this.isSessionPending(this.currentSession)) {
-            return false;
-        }
-        if (!callerNumber || !this.currentCall.caller_number) {
-            return false;
-        }
-        if (callerNumber !== this.currentCall.caller_number) {
-            return false;
-        }
-        if (this.activeCallIdentity && identity && identity.callId && this.activeCallIdentity.callId === identity.callId) {
-            return false;
-        }
-        return true;
-    }
-
-    replacePendingSession(session, identity, callerName, callerNumber) {
-        console.warn('Replacing pending incoming session with newer INVITE', {
-            oldSession: this.currentSession ? this.currentSession.id : null,
-            newSession: session.id
-        });
-        try {
-            if (this.currentSession && typeof this.currentSession.terminate === 'function') {
-                this.currentSession.terminate({
-                    status_code: 487,
-                    reason_phrase: 'Replaced by newer INVITE'
-                });
-            }
-        } catch (error) {
-            console.warn('Unable to terminate pending session', error);
-        }
-
-        const callId = identity.callId || session.id;
-        const callSid = identity.twilioCallSid;
-        this.currentSession = session;
-        this.activeCallSessionId = session.id;
-        this.activeCallIdentity = identity;
-        this.currentCall = {
-            call_id: callId,
-            caller_number: callerNumber,
-            caller_name: callerName,
-            customer_id: callerNumber,
-            direction: 'inbound'
-        };
-
-        // Notify backend
-        fetch('/call-center/api/call/ringing', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(this.currentCall)
-        });
-
-        this.showIncomingCall(callerName, callerNumber);
-        this.enableAnswerControls();
-        this.showCustomerPopup(callerNumber, callSid, callId);
-        this.ringTone.play();
-        this.attachSessionEventHandlers(session, 'inbound');
-    }
-
-    enableAnswerControls() {
-        this.answerBtn.disabled = false;
-        if (this.acceptCallFromPopup) {
-            this.acceptCallFromPopup.disabled = false;
-        }
-        this.answerInProgress = false;
     }
 
     async answerCall() {
@@ -1287,41 +983,18 @@ class CallCenterAgent {
 
         try {
             console.log('Attempting to answer call', { sessionId: session.id, status });
-
-            // If this is a transfer call and we have an original call, end it first
-            if (this.originalCallBeforeTransfer && this.originalCallBeforeTransfer.session) {
-                const originalSession = this.originalCallBeforeTransfer.session;
-                console.log('Ending original call before answering transfer call', {
-                    originalSessionId: originalSession.id,
-                    transferSessionId: session.id
-                });
-                try {
-                    if (typeof originalSession.terminate === 'function') {
-                        originalSession.terminate();
-                    }
-                } catch (endError) {
-                    console.warn('Error ending original call:', endError);
-                }
-                // Clear the original call reference
-                this.originalCallBeforeTransfer = null;
-            }
-
             const stream = await this.ensureLocalAudioStream();
-
+            
             await session.answer(this.buildSessionOptions(stream));
             console.log('Answer sent for session', session.id);
-
-            // Update active session to the answered call
-            this.activeCallSessionId = session.id;
-            this.activeCallIdentity = this.pendingTransferIdentity || this.extractSessionIdentity(session);
-
+            
             // Notify backend
             await fetch('/call-center/api/call/answer', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ call_id: this.currentCall.call_id })
             });
-
+            
             this.ringTone.pause();
             this.ringTone.currentTime = 0;
         } catch (error) {
@@ -1468,137 +1141,263 @@ class CallCenterAgent {
         }
     }
 
-    async showCustomerPopup(customerId, callSid = null, callId = null) {
+    async showCustomerPopup(customerId) {
         this.customerPopup.classList.add('active');
         this.customerData.innerHTML = '<div class="customer-info loading"><i class="fas fa-spinner fa-spin"></i> Loading customer data...</div>';
-
+        
+        // Reset position to center if not already positioned
+        if (this.customerPopupContent) {
+            const rect = this.customerPopupContent.getBoundingClientRect();
+            if (rect.left === 0 && rect.top === 0) {
+                this.customerPopupContent.style.left = '50%';
+                this.customerPopupContent.style.top = '50%';
+                this.customerPopupContent.style.transform = 'translate(-50%, -50%)';
+            }
+        }
+        
+        // Ensure Answer button in popup is enabled when popup is shown
+        // This is critical because the popup may be shown before showIncomingCall completes,
+        // or showIncomingCall may have been called but the button state needs to be refreshed
+        if (this.acceptCallFromPopup && this.currentSession) {
+            // Only enable if we have an active session that can be answered
+            const status = this.currentSession.status;
+            const answerableStatuses = [];
+            if (typeof JsSIP !== 'undefined' && JsSIP.RTCSession && JsSIP.RTCSession.C) {
+                const C = JsSIP.RTCSession.C;
+                answerableStatuses.push(
+                    C.STATUS_NULL,
+                    C.STATUS_INVITE_RECEIVED,
+                    C.STATUS_1XX_RECEIVED,
+                    C.STATUS_WAITING_FOR_ANSWER
+                );
+            }
+            if (answerableStatuses.length === 0 || answerableStatuses.includes(status)) {
+                this.acceptCallFromPopup.disabled = false;
+                console.log('Enabled popup Answer button', { sessionId: this.currentSession.id, status });
+            } else {
+                console.log('Popup Answer button remains disabled - session not answerable', { sessionId: this.currentSession.id, status });
+            }
+        }
+        
         try {
-            // Build query parameters
+            // Extract Call SID or Call-ID from current session for unique lookup
+            let url = `/call-center/api/customer/${customerId}`;
+            const identity = this.currentSession ? this.extractSessionIdentity(this.currentSession) : null;
             const params = new URLSearchParams();
-            if (this.agent && this.agent.sip_extension) {
-                params.append('extension', this.agent.sip_extension);
+            
+            if (identity) {
+                if (identity.twilioCallSid) {
+                    params.append('call_sid', identity.twilioCallSid);
+                } else if (identity.callId) {
+                    params.append('call_id', identity.callId);
+                }
             }
-            if (callSid) {
-                params.append('call_sid', callSid);
+            
+            if (params.toString()) {
+                url += '?' + params.toString();
             }
-            if (callId) {
-                params.append('call_id', callId);
-            }
-            if (customerId) {
-                params.append('customer_id', customerId);
-            }
-
-            const response = await fetch(`/call-center/api/customer/data?${params.toString()}`);
+            
+            console.log('Fetching customer data with unique identifier', { url, identity });
+            
+            const response = await fetch(url);
             const customer = await response.json();
-
-            this.displayCustomerData(customer, this.customerData);
-
-            // Store customer data for info window
-            this.currentCustomerData = customer;
-            this.currentCallSid = callSid;
-            this.currentCallId = callId;
+            
+            this.displayCustomerData(customer);
         } catch (error) {
             console.error('Fetch customer data error:', error);
             this.customerData.innerHTML = '<div class="customer-info"><p>Failed to load customer data</p></div>';
         }
     }
-
-    displayCustomerData(customer, containerElement) {
-        // Build conversation history HTML
-        let conversationHtml = '';
-        if (customer.conversation_history && customer.conversation_history.length > 0) {
-            conversationHtml = '<div class="conversation-section"><h4>Conversation History</h4><div class="conversation-list">';
-            customer.conversation_history.forEach(msg => {
-                const roleClass = msg.role === 'user' ? 'user-message' : 'assistant-message';
-                conversationHtml += `<div class="conversation-item ${roleClass}">
-                    <span class="role-badge">${msg.role === 'user' ? '👤 User' : '🤖 Assistant'}</span>
-                    <div class="message-content">${this.escapeHtml(msg.content)}</div>
-                </div>`;
-            });
-            conversationHtml += '</div></div>';
-        }
-
-        // Build activities HTML
-        let activitiesHtml = '';
-        if (customer.activities && customer.activities.length > 0) {
-            activitiesHtml = '<div class="activities-section"><h4>Recent Activities</h4><div class="activities-list">';
-            customer.activities.forEach(activity => {
-                const activityIcon = activity.activity_type === 'calendar_event' ? '📅' :
-                    activity.activity_type === 'todo' ? '✅' :
-                        activity.activity_type === 'mortgage' ? '🏠' : '🔧';
-                activitiesHtml += `<div class="activity-item">
-                    <span class="activity-icon">${activityIcon}</span>
-                    <div class="activity-content">
-                        <div class="activity-title">${this.escapeHtml(activity.title || activity.tool || 'Activity')}</div>
-                        <div class="activity-details">${this.escapeHtml(activity.result || '')}</div>
-                    </div>
-                </div>`;
-            });
-            activitiesHtml += '</div></div>';
-        }
-
-        const html = `
-            <div class="customer-info">
-                <div class="customer-field">
-                    <label>Customer ID:</label>
-                    <span>${this.escapeHtml(customer.customer_id || 'N/A')}</span>
-                </div>
-                <div class="customer-field">
-                    <label>Name:</label>
-                    <span>${this.escapeHtml(customer.name || 'N/A')}</span>
-                </div>
-                <div class="customer-field">
-                    <label>Email:</label>
-                    <span>${this.escapeHtml(customer.email || 'N/A')}</span>
-                </div>
-                <div class="customer-field">
-                    <label>Phone:</label>
-                    <span>${this.escapeHtml(customer.phone || 'N/A')}</span>
-                </div>
-                <div class="customer-field">
-                    <label>Account Status:</label>
-                    <span>${this.escapeHtml(customer.account_status || 'N/A')}</span>
-                </div>
-                <div class="customer-field">
-                    <label>Tier:</label>
-                    <span>${this.escapeHtml(customer.tier || 'N/A')}</span>
-                </div>
-                ${customer.last_contact ? `<div class="customer-field">
-                    <label>Last Contact:</label>
-                    <span>${this.escapeHtml(customer.last_contact)}</span>
-                </div>` : ''}
-                ${customer.open_tickets ? `<div class="customer-field">
-                    <label>Open Tickets:</label>
-                    <span>${customer.open_tickets}</span>
-                </div>` : ''}
-                ${customer.lifetime_value ? `<div class="customer-field">
-                    <label>Lifetime Value:</label>
-                    <span>${this.escapeHtml(customer.lifetime_value)}</span>
-                </div>` : ''}
-                ${customer.notes ? `<div class="customer-field">
-                    <label>Notes:</label>
-                    <span>${this.escapeHtml(customer.notes)}</span>
-                </div>` : ''}
-                ${conversationHtml}
-                ${activitiesHtml}
-            </div>
-        `;
-
-        containerElement.innerHTML = html;
+    
+    displayCustomerData(customer) {
+        const html = this.getCustomerDataHtml(customer);
+        this.customerData.innerHTML = html;
     }
 
     escapeHtml(text) {
-        if (!text) return '';
         const div = document.createElement('div');
         div.textContent = text;
         return div.innerHTML;
     }
-
+    
     hideCustomerPopup() {
         this.customerPopup.classList.remove('active');
-        if (this.currentCall && this.currentCall.call_id) {
-            this.showCustomerInfoWindow();
+    }
+    
+    showCustomerInfoWindow(customerDataHtml = null) {
+        // Copy customer data from popup if provided, otherwise fetch fresh
+        if (customerDataHtml) {
+            this.customerInfoData.innerHTML = customerDataHtml;
         }
+        
+        this.customerInfoWindow.classList.add('active');
+        
+        // Reset position to center if not already positioned
+        if (this.customerInfoWindowContent) {
+            const rect = this.customerInfoWindowContent.getBoundingClientRect();
+            if (rect.left === 0 && rect.top === 0) {
+                this.customerInfoWindowContent.style.left = '50%';
+                this.customerInfoWindowContent.style.top = '50%';
+                this.customerInfoWindowContent.style.transform = 'translate(-50%, -50%)';
+            }
+        }
+        
+        console.log('📋 Customer info window opened (read-only)');
+    }
+    
+    hideCustomerInfoWindow() {
+        this.customerInfoWindow.classList.remove('active');
+    }
+
+    getCustomerDataHtml(customer) {
+        // Build customer info section
+        let customerInfoHtml = `
+            <div class="customer-info">
+                <div class="customer-field">
+                    <label>Customer ID:</label>
+                    <span>${customer.customer_id || 'N/A'}</span>
+                </div>
+                <div class="customer-field">
+                    <label>Name:</label>
+                    <span>${customer.name || 'N/A'}</span>
+                </div>
+                <div class="customer-field">
+                    <label>Email:</label>
+                    <span>${customer.email || 'N/A'}</span>
+                </div>
+                <div class="customer-field">
+                    <label>Phone:</label>
+                    <span>${customer.phone || 'N/A'}</span>
+                </div>
+                <div class="customer-field">
+                    <label>Account Status:</label>
+                    <span>${customer.account_status || 'N/A'}</span>
+                </div>
+                <div class="customer-field">
+                    <label>Tier:</label>
+                    <span>${customer.tier || 'N/A'}</span>
+                </div>
+                <div class="customer-field">
+                    <label>Last Contact:</label>
+                    <span>${customer.last_contact || 'N/A'}</span>
+                </div>
+                <div class="customer-field">
+                    <label>Open Tickets:</label>
+                    <span>${customer.open_tickets || 'N/A'}</span>
+                </div>
+                <div class="customer-field">
+                    <label>Lifetime Value:</label>
+                    <span>${customer.lifetime_value || 'N/A'}</span>
+                </div>
+                <div class="customer-field">
+                    <label>Notes:</label>
+                    <span>${customer.notes || 'N/A'}</span>
+                </div>
+            </div>
+        `;
+        
+        // Build activities section (calendar events, todos, etc.)
+        let activitiesHtml = '';
+        if (customer.activities && customer.activities.length > 0) {
+            activitiesHtml = `
+                <div class="customer-section">
+                    <h4><i class="fas fa-tasks"></i> Activities During Session</h4>
+                    <div class="activities-list">
+            `;
+            
+            customer.activities.forEach((activity, index) => {
+                let activityIcon = 'fa-check-circle';
+                let activityColor = 'info';
+                let activityText = '';
+                
+                if (activity.type === 'calendar_event') {
+                    activityIcon = 'fa-calendar';
+                    activityColor = 'primary';
+                    if (activity.title) {
+                        activityText = `Created calendar event: "${activity.title}"`;
+                        if (activity.start && activity.end) {
+                            activityText += ` (${activity.start} - ${activity.end})`;
+                        }
+                    } else {
+                        activityText = `Created calendar event: ${activity.raw || 'Event created'}`;
+                    }
+                } else if (activity.type === 'todo') {
+                    activityIcon = 'fa-list-check';
+                    if (activity.action === 'created') {
+                        activityColor = 'success';
+                        activityText = `Created todo: "${activity.title || 'Todo'}"`;
+                        if (activity.priority) {
+                            activityText += ` (Priority: ${activity.priority})`;
+                        }
+                        if (activity.due_date) {
+                            activityText += ` (Due: ${activity.due_date})`;
+                        }
+                    } else if (activity.action === 'completed') {
+                        activityColor = 'success';
+                        activityText = `Completed todo: ${activity.raw || 'Todo completed'}`;
+                    } else if (activity.action === 'updated') {
+                        activityColor = 'warning';
+                        activityText = `Updated todo: ${activity.raw || 'Todo updated'}`;
+                    } else if (activity.action === 'deleted') {
+                        activityColor = 'danger';
+                        activityText = `Deleted todo: ${activity.raw || 'Todo deleted'}`;
+                    } else {
+                        activityText = `Todo ${activity.action}: ${activity.raw || 'Todo action'}`;
+                    }
+                } else {
+                    activityText = `${activity.type}: ${activity.raw || 'Activity'}`;
+                }
+                
+                activitiesHtml += `
+                    <div class="activity-item activity-${activityColor}">
+                        <i class="fas ${activityIcon}"></i>
+                        <span>${activityText}</span>
+                    </div>
+                `;
+            });
+            
+            activitiesHtml += `
+                    </div>
+                </div>
+            `;
+        }
+        
+        // Build conversation history section
+        let conversationHtml = '';
+        if (customer.conversation_history && customer.conversation_history.length > 0) {
+            conversationHtml = `
+                <div class="customer-section">
+                    <h4><i class="fas fa-comments"></i> Conversation History</h4>
+                    <div class="conversation-list">
+            `;
+            
+            // Show last 10 messages (most recent first)
+            const recentMessages = customer.conversation_history.slice(-10).reverse();
+            
+            recentMessages.forEach((msg, index) => {
+                const messageClass = msg.type === 'user' ? 'user-message' : 'assistant-message';
+                const messageIcon = msg.type === 'user' ? 'fa-user' : 'fa-robot';
+                const messageLabel = msg.type === 'user' ? 'User' : 'Assistant';
+                
+                conversationHtml += `
+                    <div class="conversation-item ${messageClass}">
+                        <div class="message-header">
+                            <i class="fas ${messageIcon}"></i>
+                            <strong>${messageLabel}</strong>
+                        </div>
+                        <div class="message-content">${this.escapeHtml(msg.content || '')}</div>
+                    </div>
+                `;
+            });
+            
+            conversationHtml += `
+                    </div>
+                </div>
+            `;
+        }
+        
+        // Combine all sections
+        return customerInfoHtml + activitiesHtml + conversationHtml;
     }
 
     showIncomingCall(callerName, callerNumber) {
