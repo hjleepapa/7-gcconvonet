@@ -49,6 +49,9 @@ class CallCenterAgent {
         this.activeCallIdentity = null;
         this.lastInviteTime = null;
         this.lastInviteCaller = null;
+        this.isHandlingTransfer = false;
+        this.transferTimeoutId = null;
+        this.lastProcessedTransferId = null;
 
         this.init();
     }
@@ -885,9 +888,16 @@ class CallCenterAgent {
             activeSession: this.activeCallSessionId
         });
 
-        // CRITICAL FIX: Store the transfer call as PENDING instead of immediately replacing the active call
-        // This ensures the INVITE is properly acknowledged before terminating the first call
-        
+        // GUARD: Prevent duplicate transfer handling for the same call
+        const transferId = identity.callId || session.id;
+        if (this.isHandlingTransfer || this.lastProcessedTransferId === transferId) {
+            console.warn('Transfer already being handled or duplicate event for:', transferId);
+            return;
+        }
+
+        this.isHandlingTransfer = true;
+        this.lastProcessedTransferId = transferId;
+
         // Store the original call session for later termination
         const originalSession = this.currentSession;
         const originalCallSessionId = this.activeCallSessionId;
@@ -934,24 +944,51 @@ class CallCenterAgent {
             () => this.rejectTransferCall(session)
         );
 
+        // Set a timeout for transfer acceptance (30 seconds)
+        if (this.transferTimeoutId) clearTimeout(this.transferTimeoutId);
+        this.transferTimeoutId = setTimeout(() => {
+            if (this.pendingTransferSession) {
+                console.log('Transfer acceptance timeout - auto-rejecting');
+                this.rejectTransferCall(session);
+            }
+        }, 30000);
+
         // Attach event handlers to pending session
         this.attachSessionEventHandlers(session, 'pending-transfer');
     }
 
     showTransferPrompt(newSession, oldSession, callerName, callerNumber, onAccept, onReject) {
-        // Create a transfer prompt showing the current call and new incoming call
+        // Remove any existing transfer notification first to prevent duplicates
+        const existingAlert = document.querySelector('.transfer-notification');
+        if (existingAlert) {
+            console.log('Removing existing transfer notification');
+            existingAlert.remove();
+        }
+
         console.log('Showing transfer prompt:', { newCaller: callerName, oldCallActive: !!oldSession });
         
-        // Update the customer popup to show the transfer notification
+        // Create a comprehensive transfer prompt showing both calls clearly
         const transferNotification = document.createElement('div');
         transferNotification.className = 'transfer-notification';
+        transferNotification.id = 'transferNotificationPrompt';
+        
+        // Get current call info to display
+        const currentCallInfo = oldSession ? 
+            `<div class="current-call-info">
+                <p><strong>Current Call:</strong> ${this.currentCall?.caller_name || 'Unknown'} (${this.currentCall?.caller_number || 'Unknown'})</p>
+            </div>` : '';
+        
         transferNotification.innerHTML = `
             <div class="transfer-alert">
-                <h3>Call Transfer Incoming</h3>
-                <p><strong>${callerName}</strong> (${callerNumber}) is calling</p>
+                <h3>📞 Incoming Call Transfer</h3>
+                ${currentCallInfo}
+                <div class="incoming-call-info">
+                    <p><strong>Transfer From:</strong> <span style="color: #ff6b35; font-size: 1.1em;">${callerName}</span> (${callerNumber})</p>
+                </div>
+                <p style="font-size: 0.9em; color: #666; margin: 10px 0;">Accept to answer the transfer call, or reject to keep current call</p>
                 <div class="transfer-buttons">
-                    <button class="accept-transfer-btn" id="acceptTransferBtn">Accept Transfer</button>
-                    <button class="reject-transfer-btn" id="rejectTransferBtn">Reject</button>
+                    <button class="accept-transfer-btn" id="acceptTransferBtn">✓ Accept Transfer</button>
+                    <button class="reject-transfer-btn" id="rejectTransferBtn">✕ Reject</button>
                 </div>
             </div>
         `;
@@ -959,29 +996,42 @@ class CallCenterAgent {
         // Append to customer popup if it exists
         if (this.customerPopup) {
             this.customerPopup.classList.add('active');
-            const existingAlert = this.customerPopup.querySelector('.transfer-notification');
-            if (existingAlert) existingAlert.remove();
+            // Remove any old transfer notifications
+            const oldNotifications = this.customerPopup.querySelectorAll('.transfer-notification');
+            oldNotifications.forEach(n => n.remove());
             this.customerPopup.insertBefore(transferNotification, this.customerPopup.firstChild);
         }
         
-        // Attach button handlers
-        const acceptBtn = document.getElementById('acceptTransferBtn');
-        const rejectBtn = document.getElementById('rejectTransferBtn');
+        // Attach button handlers (with proper event delegation to avoid duplicates)
+        const acceptBtn = transferNotification.querySelector('.accept-transfer-btn');
+        const rejectBtn = transferNotification.querySelector('.reject-transfer-btn');
+        
+        let handled = false; // Flag to prevent double-handling
         
         if (acceptBtn) {
             acceptBtn.addEventListener('click', (e) => {
                 e.preventDefault();
-                transferNotification.remove();
-                onAccept();
-            }, { once: true });
+                e.stopImmediatePropagation();
+                if (!handled) {
+                    handled = true;
+                    console.log('Accept transfer button clicked');
+                    transferNotification.remove();
+                    onAccept();
+                }
+            });
         }
         
         if (rejectBtn) {
             rejectBtn.addEventListener('click', (e) => {
                 e.preventDefault();
-                transferNotification.remove();
-                onReject();
-            }, { once: true });
+                e.stopImmediatePropagation();
+                if (!handled) {
+                    handled = true;
+                    console.log('Reject transfer button clicked');
+                    transferNotification.remove();
+                    onReject();
+                }
+            });
         }
     }
 
@@ -994,6 +1044,12 @@ class CallCenterAgent {
         if (!newSession) {
             console.error('New session is null, cannot accept transfer');
             return;
+        }
+
+        // Clear the transfer timeout if any
+        if (this.transferTimeoutId) {
+            clearTimeout(this.transferTimeoutId);
+            this.transferTimeoutId = null;
         }
 
         // Now we can safely replace the current session with the pending transfer
@@ -1016,11 +1072,14 @@ class CallCenterAgent {
             }
         }
 
-        // Update UI
+        // Update UI to reflect the transfer
         this.showIncomingCall(this.pendingTransferCall.caller_name, this.pendingTransferCall.caller_number);
         this.enableAnswerControls();
 
-        // Play ringtone
+        // Call initiate UI update
+        this.updateCallDisplay('Transfer call accepted - ready to answer');
+
+        // Play ringtone to indicate transfer is ready
         try {
             console.log('Playing ringtone for accepted transfer call...');
             const playPromise = this.ringTone.play();
@@ -1033,6 +1092,9 @@ class CallCenterAgent {
             console.warn('Error playing ringtone:', error);
         }
 
+        // Clear transfer handling flags
+        this.isHandlingTransfer = false;
+        
         // Clear pending transfer data
         this.pendingTransferSession = null;
         this.pendingTransferCall = null;
@@ -1041,6 +1103,18 @@ class CallCenterAgent {
 
     rejectTransferCall(session) {
         console.log('Rejecting transfer call:', { sessionId: session?.id });
+
+        // Clear the transfer timeout if any
+        if (this.transferTimeoutId) {
+            clearTimeout(this.transferTimeoutId);
+            this.transferTimeoutId = null;
+        }
+
+        // Remove transfer notification from UI
+        const transferNotif = document.getElementById('transferNotificationPrompt');
+        if (transferNotif) {
+            transferNotif.remove();
+        }
 
         // Terminate the transfer session
         if (session) {
@@ -1053,6 +1127,9 @@ class CallCenterAgent {
             }
         }
 
+        // Clear transfer handling flags
+        this.isHandlingTransfer = false;
+        
         // Clear pending transfer data
         this.pendingTransferSession = null;
         this.pendingTransferCall = null;

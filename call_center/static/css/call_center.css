@@ -847,9 +847,9 @@ body {
     padding: 16px;
     margin-bottom: 16px;
     background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
-    border: 2px solid var(--warning-color);
-    border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(245, 158, 11, 0.3);
+    border: 3px solid #dc2626;
+    border-radius: 12px;
+    box-shadow: 0 6px 20px rgba(245, 158, 11, 0.4), inset 0 0 0 1px rgba(255, 255, 255, 0.2);
     animation: slideInDown 0.3s ease-out;
 }
 
@@ -858,9 +858,43 @@ body {
 }
 
 .transfer-alert h3 {
-    margin-bottom: 8px;
-    font-size: 18px;
-    font-weight: 600;
+    margin-bottom: 12px;
+    font-size: 20px;
+    font-weight: 700;
+    color: #dc2626;
+    text-align: center;
+}
+
+.current-call-info {
+    background: rgba(255, 255, 255, 0.3);
+    padding: 10px 12px;
+    border-radius: 6px;
+    margin-bottom: 12px;
+    border-left: 4px solid #10b981;
+}
+
+.current-call-info p {
+    margin-bottom: 0;
+    font-size: 13px;
+    opacity: 0.95;
+}
+
+.current-call-info strong {
+    color: #047857;
+}
+
+.incoming-call-info {
+    background: rgba(255, 255, 255, 0.2);
+    padding: 12px;
+    border-radius: 6px;
+    border-left: 4px solid #dc2626;
+    margin-bottom: 12px;
+}
+
+.incoming-call-info p {
+    margin-bottom: 0;
+    font-size: 14px;
+    font-weight: 500;
 }
 
 .transfer-alert p {
@@ -873,12 +907,12 @@ body {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 12px;
-    margin-top: 12px;
+    margin-top: 14px;
 }
 
 .accept-transfer-btn,
 .reject-transfer-btn {
-    padding: 10px 16px;
+    padding: 12px 16px;
     border: none;
     border-radius: 6px;
     font-weight: 600;
@@ -894,7 +928,8 @@ body {
 
 .accept-transfer-btn:hover {
     background: #059669;
-    box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+    box-shadow: 0 4px 12px rgba(16, 185, 129, 0.4);
+    transform: translateY(-2px);
 }
 
 .accept-transfer-btn:active {
@@ -908,7 +943,8 @@ body {
 
 .reject-transfer-btn:hover {
     background: #dc2626;
-    box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+    box-shadow: 0 4px 12px rgba(239, 68, 68, 0.4);
+    transform: translateY(-2px);
 }
 
 .reject-transfer-btn:active {
