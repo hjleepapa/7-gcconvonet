@@ -322,9 +322,25 @@ class CallCenterAgent {
         });
 
         this.sipUser.on('registrationFailed', (e) => {
-            console.error('✗ SIP registration failed:', e);
+            console.error('✗ SIP registration failed:', {
+                cause: e.cause,
+                response: e.response ? {
+                    status_code: e.response.status_code,
+                    reason_phrase: e.response.reason_phrase
+                } : 'no response'
+            });
             this.updateSIPStatus(false);
-            alert('Failed to register with SIP server. Please check your credentials.');
+
+            let errorMessage = 'Failed to register with SIP server.';
+            if (e.cause === JsSIP.C.causes.AUTHENTICATION_ERROR) {
+                errorMessage += ' Authentication failed. Please check your username and password.';
+            } else if (e.cause === JsSIP.C.causes.CONNECTION_ERROR) {
+                errorMessage += ' Connection error. Please check your network and SIP domain.';
+            } else {
+                errorMessage += ' Cause: ' + (e.cause || 'Unknown');
+            }
+
+            alert(errorMessage);
         });
 
         this.sipUser.on('newRTCSession', (event) => {
