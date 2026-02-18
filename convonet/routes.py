@@ -2914,7 +2914,7 @@ def set_user_llm_provider():
 def get_stt_providers():
     """Get list of available STT providers."""
     try:
-        # Currently we support Deepgram, ElevenLabs, and Cartesia
+        # Currently we support Deepgram, ElevenLabs, Cartesia, and AssemblyAI
         providers = [
             {
                 "id": "deepgram",
@@ -2930,6 +2930,11 @@ def get_stt_providers():
                 "id": "cartesia",
                 "name": "Cartesia",
                 "available": bool(os.getenv('CARTESIA_API_KEY'))
+            },
+            {
+                "id": "assemblyai",
+                "name": "AssemblyAI",
+                "available": bool(os.getenv('ASSEMBLYAI_API_KEY'))
             }
         ]
         return jsonify({
@@ -2981,7 +2986,7 @@ def set_user_stt_provider():
             return jsonify({'success': False, 'error': 'Provider is required'}), 400
             
         provider = provider.lower()
-        if provider not in ['deepgram', 'elevenlabs', 'cartesia']:
+        if provider not in ['deepgram', 'elevenlabs', 'cartesia', 'assemblyai']:
             return jsonify({'success': False, 'error': 'Invalid provider'}), 400
             
         redis_manager.set(f"user:{user_id}:stt_provider", provider)

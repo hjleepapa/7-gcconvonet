@@ -1,6 +1,11 @@
 """
 AssemblyAI Streaming Speech-to-Text Service
-Real-time audio transcription using AssemblyAI's WebSocket Streaming API
+Real-time audio transcription using AssemblyAI's WebSocket Streaming API v3.
+
+API Reference: https://www.assemblyai.com/docs/api-reference/streaming-api/streaming-api
+- Server messages: SessionBegins/Begin, Turn, Termination
+- Client messages: sendAudio (binary), ForceEndpoint, Terminate
+- EU server: streaming.eu.assemblyai.com
 """
 
 import os
@@ -116,7 +121,9 @@ class AssemblyAIStreamingSTT:
             response = await asyncio.wait_for(self.websocket.recv(), timeout=5.0)
             message = json.loads(response)
             
-            if message.get("type") == "SessionBegins":
+            # Spec: receiveSessionBegins sends type "Begin" (AsyncAPI streaming_sessionBegins)
+            msg_type = message.get("type")
+            if msg_type in ("SessionBegins", "Begin"):
                 self.session_id = message.get("id")
                 expires_at = message.get("expires_at")
                 print(f"✅ AssemblyAI: Session created: {self.session_id}", flush=True)
@@ -205,6 +212,7 @@ class AssemblyAIStreamingSTT:
         if self.websocket:
             try:
                 # Send termination message
+                # Spec: sendSessionTermination (streaming_sessionTermination)
                 terminate_msg = json.dumps({"type": "Terminate"})
                 await self.websocket.send(terminate_msg)
                 await self.websocket.close()
@@ -352,41 +360,41 @@ class AssemblyAIStreamingSTT:
         Transcribe a complete audio buffer
         
         Args:
-            audio_bytes: Entire audio buffer
+            audio_bytes: Entire audio buffer (16kHz PCM s16le)
             timeout: Timeout for transcription
             
         Returns:
             Transcribed text
         """
-        # Connect
-        if not self.connect():
-            raise RuntimeError("Failed to connect to AssemblyAI")
-        
+        async def _run() -> str:
+            await self.connect_async()
+            try:
+                chunk_size = 50 * self.sample_rate * 2 // 1000  # 50ms chunks
+                for i in range(0, len(audio_bytes), chunk_size):
+                    chunk = audio_bytes[i:i + chunk_size]
+                    await self.send_audio_async(chunk)
+                # Spec: sendForceEndpoint (streaming_forceEndpoint)
+                await self.websocket.send(json.dumps({"type": "ForceEndpoint"}))
+                results = []
+                while True:
+                    transcript = await self.receive_transcript_async(timeout)
+                    if transcript:
+                        results.append(transcript)
+                    else:
+                        break
+                return " ".join(results).strip()
+            finally:
+                await self.close_async()
+
         try:
-            # Send audio (may need to chunk depending on size)
-            chunk_size = 50 * self.sample_rate * 2 // 1000  # 50ms chunks
-            
-            for i in range(0, len(audio_bytes), chunk_size):
-                chunk = audio_bytes[i:i + chunk_size]
-                self.send_audio(chunk)
-            
-            # Send force endpoint to finalize
-            force_endpoint = json.dumps({"type": "ForceEndpoint"})
-            self.websocket.send(force_endpoint)
-            
-            # Collect results
-            results = []
-            while True:
-                transcript = self.receive_transcript(timeout)
-                if transcript:
-                    results.append(transcript)
-                else:
-                    break
-            
-            return " ".join(results).strip()
-            
-        finally:
-            self.close()
+            return asyncio.run(_run())
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                return loop.run_until_complete(_run())
+            finally:
+                loop.close()
     
     def get_session_info(self) -> Dict:
         """Get current session information"""

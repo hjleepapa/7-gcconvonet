@@ -93,6 +93,15 @@ except ImportError as e:
     CARTESIA_AVAILABLE = False
     CARTESIA_STREAMING_AVAILABLE = False
 
+# AssemblyAI STT integration
+try:
+    from convonet.assemblyai.service import transcribe_with_assemblyai
+    ASSEMBLYAI_AVAILABLE = True
+except ImportError as e:
+    print(f"⚠️ AssemblyAI not available: {e}")
+    ASSEMBLYAI_AVAILABLE = False
+    transcribe_with_assemblyai = None
+
 # Rime TTS integration
 try:
     from convonet.rime import RimeTTSService
@@ -455,7 +464,7 @@ def _get_llm_provider_for_user(user_id: Optional[str]) -> str:
     return provider
 
 def _get_stt_provider_for_user(user_id: Optional[str]) -> str:
-    """Get STT provider: 'deepgram', 'cartesia', or 'elevenlabs'"""
+    """Get STT provider: 'deepgram', 'cartesia', 'elevenlabs', or 'assemblyai'"""
     provider = None
     
     # Try to get user's selection from Redis
@@ -482,7 +491,7 @@ def _get_stt_provider_for_user(user_id: Optional[str]) -> str:
         provider = "deepgram"
     
     # Validate provider is in supported list
-    if provider not in ["deepgram", "cartesia", "elevenlabs"]:
+    if provider not in ["deepgram", "cartesia", "elevenlabs", "assemblyai"]:
         provider = "deepgram"
     
     return provider
@@ -3202,6 +3211,16 @@ def init_socketio(socketio_instance: SocketIO, app):
                         if stt_provider == "cartesia":
                             cartesia = get_cartesia_service()
                             transcribed_text = cartesia.transcribe_audio_buffer(audio_buffer, language="en")
+                        elif stt_provider == "assemblyai" and ASSEMBLYAI_AVAILABLE and transcribe_with_assemblyai:
+                            # AssemblyAI expects 16kHz PCM; resample from typical 48kHz WebRTC
+                            audio_16k = resample_audio(
+                                audio_buffer,
+                                source_sample_rate=48000,
+                                target_sample_rate=16000,
+                                sample_width=2,
+                                channels=1
+                            )
+                            transcribed_text = transcribe_with_assemblyai(audio_16k)
                         else:
                             # Default to Deepgram with fixed English language (no auto-detection)
                             transcribed_text = transcribe_audio_with_deepgram_webrtc(audio_buffer, language="en")
