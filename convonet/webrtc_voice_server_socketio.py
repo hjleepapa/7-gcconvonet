@@ -411,7 +411,7 @@ def _get_llm_provider_for_user(user_id: Optional[str]) -> str:
 
 def _get_stt_provider_for_user(user_id: Optional[str]) -> str:
     """Get STT provider: 'deepgram', 'cartesia', or 'elevenlabs'"""
-    # PRIORITY 2: Default to cartesia for best latency + quality
+    # Default to deepgram (stable, proven) - Cartesia SDK API TBD
     provider = None
     if redis_manager.is_available():
         try:
@@ -423,10 +423,10 @@ def _get_stt_provider_for_user(user_id: Optional[str]) -> str:
             pass
             
     if not provider:
-        provider = "cartesia"
+        provider = "deepgram"
         
     # Validation
-    if provider == "cartesia" and not CARTESIA_AVAILABLE:
+    if provider == "deepgram" and not DEEPGRAM_AVAILABLE:
         provider = "deepgram"
     if provider == "elevenlabs" and not ELEVENLABS_AVAILABLE:
         provider = "deepgram"
