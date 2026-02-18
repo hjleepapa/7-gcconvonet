@@ -426,6 +426,9 @@ BARge_IN_MIN_INTERVAL_SEC = 0.25
 # Global guards for sessions to throttle overlapping agent runs
 processing_guards = {}
 
+# Processing music (hold music) while transcribing/agent processing
+_processing_music_control = {}  # session_id -> {'stop_event': Event, 'thread': Thread}
+
 # One-time model warm-up flag
 MODEL_WARMED = False
 MODEL_WARMUP_LOCK = threading.Lock()
@@ -564,8 +567,72 @@ def _ensure_livekit_session(session_id: str, user_id: str):
 
 def _send_livekit_pcm(session_id: str, pcm_bytes: bytes, sample_rate: int = 48000, channels: int = 1):
     if _livekit_active() and pcm_bytes:
+        _stop_processing_music(session_id)
         print(f"📡 Bridge: Sending {len(pcm_bytes)} bytes to LiveKit for session {session_id}", flush=True)
         livekit_manager.send_pcm(session_id, pcm_bytes, sample_rate=sample_rate, channels=channels)
+
+def _stop_processing_music(session_id: str):
+    """Stop processing music for session (call before sending first TTS)"""
+    ctrl = _processing_music_control.pop(session_id, None)
+    if ctrl:
+        ctrl['stop_event'].set()
+        if ctrl.get('thread') and ctrl['thread'].is_alive():
+            ctrl['thread'].join(timeout=1.0)
+        print(f"🔇 Stopped processing music for {session_id}", flush=True)
+
+def _load_processing_music_pcm() -> Optional[bytes]:
+    """Load processing.mp3, decode to PCM 48kHz mono. Returns None on failure."""
+    try:
+        import numpy as np
+        import librosa
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'static', 'assets', 'audio', 'processing.mp3')
+        if not os.path.isfile(path):
+            print(f"⚠️ Processing music not found: {path}", flush=True)
+            return None
+        # librosa loads as float [-1,1]; convert to int16
+        data, sr = librosa.load(path, sr=48000, mono=True)
+        data_int16 = (np.clip(data, -1.0, 1.0) * 32767).astype(np.int16)
+        return data_int16.tobytes()
+    except Exception as e:
+        print(f"⚠️ Could not load processing music: {e}", flush=True)
+        return None
+
+def _start_processing_music(session_id: str):
+    """Start streaming processing.mp3 to LiveKit in background (hold music during processing)."""
+    if not _livekit_active():
+        return
+    if session_id in _processing_music_control:
+        return
+    pcm = _load_processing_music_pcm()
+    if not pcm or len(pcm) < 1000:
+        return
+    stop_event = threading.Event()
+    def _stream_loop():
+        try:
+            print(f"🎵 Starting processing music for {session_id}", flush=True)
+            chunk_size = 48000 * 2  # 1 second of 48kHz mono 16-bit
+            idx = 0
+            while not stop_event.is_set():
+                chunk = pcm[idx:idx + chunk_size]
+                if not chunk:
+                    idx = 0
+                    continue
+                idx += len(chunk)
+                if idx >= len(pcm):
+                    idx = 0
+                session = livekit_manager.get_session(session_id)
+                if not session:
+                    break
+                session.send_pcm(chunk, sample_rate=48000, channels=1)
+                if stop_event.wait(timeout=0.9):
+                    break
+        except Exception as e:
+            print(f"⚠️ Processing music error: {e}", flush=True)
+        finally:
+            _processing_music_control.pop(session_id, None)
+    t = threading.Thread(target=_stream_loop, daemon=True)
+    _processing_music_control[session_id] = {'stop_event': stop_event, 'thread': t}
+    t.start()
 
 # LiveKit session manager (optional)
 try:
@@ -912,6 +979,7 @@ def register_active_response(session_id: str, cancel_event: threading.Event, tts
 def cancel_active_response(session_id: str, reason: str = "barge_in"):
     # Clear processing guard immediately to allow new recording
     if session_id in processing_guards:
+        _stop_processing_music(session_id)
         processing_guards.pop(session_id, None)
         print(f"🧹 processing_guard CLEARED via cancel_active_response for session: {session_id}", flush=True)
         
@@ -3014,6 +3082,8 @@ def init_socketio(socketio_instance: SocketIO, app):
         
         # Set guard BEFORE spawning to prevent duplicate processing from rapid stop_recording events
         processing_guards[session_id] = True
+        # Start hold music for LiveKit callers during processing
+        _start_processing_music(session_id)
         # Audio analysis moved to background task to avoid blocking event loop
         # Process audio asynchronously
         sentry_capture_voice_event("audio_processing_started", session_id, details={"buffer_size": len(audio_buffer)})
@@ -3128,6 +3198,7 @@ def init_socketio(socketio_instance: SocketIO, app):
                             'message': 'No speech detected. Please speak clearly into your microphone.',
                             'details': f'Audio was too quiet or silent (volume level: {rms:.0f}). Try speaking louder or closer to your microphone.'
                         }, namespace='/voice', room=session_id)
+                        _stop_processing_music(session_id)
                         processing_guards.pop(session_id, None)
                         print(f"🧹 processing_guard CLEARED (audio too quiet) for session: {session_id}", flush=True)
                         return
@@ -4385,7 +4456,8 @@ def init_socketio(socketio_instance: SocketIO, app):
                     'message': f"Error processing audio: {str(e)}"
                 }, namespace='/voice', room=session_id)
             finally:
-                # Clear guard
+                # Clear guard and stop hold music
+                _stop_processing_music(session_id)
                 processing_guards.pop(session_id, None)
                 print(f"🧹 processing_guard CLEARED for session: {session_id}", flush=True)
                 sys.stdout.flush()
