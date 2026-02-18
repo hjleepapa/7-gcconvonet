@@ -209,8 +209,13 @@ class CartesiaService:
                 # ChunkEvent is a Pydantic model with direct attribute access
                 # Audio data is base64-encoded in the 'audio' attribute
                 if hasattr(chunk_event, 'audio') and chunk_event.audio:
-                    # Decode base64 audio to bytes
-                    chunk = base64.b64decode(chunk_event.audio)
+                    # Decode base64 audio to bytes (streaming chunks may lack padding)
+                    audio_b64 = chunk_event.audio
+                    if isinstance(audio_b64, str):
+                        audio_b64 = audio_b64.encode('ascii')
+                    # Add padding so length is multiple of 4 (required for b64decode)
+                    audio_b64 = audio_b64 + b'=' * (-len(audio_b64) % 4)
+                    chunk = base64.b64decode(audio_b64)
                     chunk_count += 1
                     if chunk_count == 1:
                         logger.info(f"🎵 Received first TTS chunk ({len(chunk)} bytes)")
