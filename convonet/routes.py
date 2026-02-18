@@ -3027,6 +3027,11 @@ def get_tts_providers():
                 "id": "rime",
                 "name": "Rime",
                 "available": bool(os.getenv('RIME_API_KEY'))
+            },
+            {
+                "id": "inworld",
+                "name": "Inworld",
+                "available": bool(os.getenv('INWORLD_API_KEY'))
             }
         ]
         return jsonify({
@@ -3078,7 +3083,7 @@ def set_user_tts_provider():
             return jsonify({'success': False, 'error': 'Provider is required'}), 400
             
         provider = provider.lower()
-        if provider not in ['elevenlabs', 'cartesia', 'openai', 'deepgram', 'rime']:
+        if provider not in ['elevenlabs', 'cartesia', 'openai', 'deepgram', 'rime', 'inworld']:
             return jsonify({'success': False, 'error': 'Invalid provider'}), 400
             
         redis_manager.set(f"user:{user_id}:tts_provider", provider)

@@ -102,6 +102,15 @@ except ImportError as e:
     print(f"⚠️ Rime TTS not available: {e}")
     RIME_AVAILABLE = False
 
+# Inworld AI TTS integration
+try:
+    from convonet.inworld import InworldTTSService
+    from convonet.inworld.service import get_inworld_service
+    INWORLD_AVAILABLE = True
+except ImportError as e:
+    print(f"⚠️ Inworld TTS not available: {e}")
+    INWORLD_AVAILABLE = False
+
 # Import the blueprint (optional - not used in this module)
 # from convonet.routes import convonet_todo_bp
 
@@ -257,6 +266,19 @@ def _synthesize_audio_linear16(text: str, provider: str = "deepgram", voice_id: 
                 return audio_data
         except Exception as e:
             print(f"❌ Rime synthesis failed: {e}", flush=True)
+            # Fallback to deepgram below
+
+    if provider == "inworld":
+        try:
+            if INWORLD_AVAILABLE:
+                print(f"🎵 _synthesize_audio_linear16: Using Inworld for synthesis (context: {voice_id or 'default'})...", flush=True)
+                context_id = voice_id or "default"
+                inworld_service = get_inworld_service(context_id=context_id)
+                audio_data = inworld_service.synthesize(clean_text, context_id=context_id)
+                print(f"✅ _synthesize_audio_linear16: Received {len(audio_data)} bytes from Inworld", flush=True)
+                return audio_data
+        except Exception as e:
+            print(f"❌ Inworld synthesis failed: {e}", flush=True)
             # Fallback to deepgram below
 
     if provider == "cartesia":
@@ -496,7 +518,7 @@ def _get_tts_provider_for_user(user_id: Optional[str]) -> str:
         print(f"🎵 No TTS provider found, using default: {provider}", flush=True)
     
     # Validate provider is in supported list
-    if provider not in ["deepgram", "cartesia", "elevenlabs", "rime"]:
+    if provider not in ["deepgram", "cartesia", "elevenlabs", "rime", "inworld"]:
         print(f"⚠️ Invalid TTS provider '{provider}', falling back to deepgram", flush=True)
         provider = "deepgram"
     
