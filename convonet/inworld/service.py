@@ -185,37 +185,73 @@ class InworldTTSService:
             print(f"❌ Inworld TTS error: {type(e).__name__}: {e}", flush=True)
             raise
     
+    def synthesize_rest(self, text: str) -> Optional[bytes]:
+        """
+        Synthesize using REST API (POST /tts/v1/voice). More reliable than WebSocket on cloud.
+        """
+        if not self.api_key:
+            return None
+        try:
+            import httpx
+            import base64
+            headers = {
+                "Authorization": f"Basic {self.api_key}",
+                "Content-Type": "application/json",
+            }
+            payload = {
+                "text": text,
+                "voiceId": "Ashley",
+                "modelId": "inworld-tts-1.5-mini",
+            }
+            resp = httpx.post(
+                "https://api.inworld.ai/tts/v1/voice",
+                headers=headers,
+                json=payload,
+                timeout=30.0,
+            )
+            if resp.status_code != 200:
+                print(f"❌ Inworld REST TTS: {resp.status_code} - {resp.text[:200]}", flush=True)
+                return None
+            data = resp.json()
+            b64 = data.get("audioContent") or data.get("audio_content")
+            if not b64:
+                print("❌ Inworld REST: No audioContent in response", flush=True)
+                return None
+            audio = base64.b64decode(b64)
+            if audio[:4] == b"RIFF" and b"WAVE" in audio[:12]:
+                audio = audio[44:]  # Skip WAV header
+            print(f"✅ Inworld REST TTS: {len(audio)} bytes", flush=True)
+            return audio
+        except Exception as e:
+            print(f"❌ Inworld REST TTS error: {e}", flush=True)
+            return None
+
     def synthesize(self, text: str, context_id: Optional[str] = None) -> bytes:
         """
-        Synthesize speech from text (synchronous wrapper)
-        
-        Args:
-            text: Text to synthesize
-            context_id: Optional context ID
-            
-        Returns:
-            Audio bytes
+        Synthesize speech from text. Tries REST first (reliable on cloud), falls back to WebSocket.
         """
         if context_id:
             self.current_context_id = context_id
         
         print(f"🎤 Inworld TTS: Synthesizing '{text[:50]}...'", flush=True)
         
+        # Try REST first - WebSocket returns 404 on Render/cloud
+        audio = self.synthesize_rest(text)
+        if audio:
+            return audio
+        
         try:
-            # Run async synthesis in event loop
             audio = asyncio.run(self._synthesize_async(text, context_id))
             return audio
-        except RuntimeError as e:
-            # Handle case where event loop already exists (Flask context)
+        except RuntimeError:
             try:
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
-                    # Use thread-based approach if loop is already running
                     audio = self._synthesize_threaded(text, context_id)
                     return audio
-            except:
+            except Exception:
                 pass
-            raise
+            raise RuntimeError("Inworld TTS failed (REST and WebSocket)")
     
     def _synthesize_threaded(self, text: str, context_id: Optional[str] = None) -> bytes:
         """

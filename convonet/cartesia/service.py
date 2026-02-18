@@ -21,6 +21,31 @@ import tempfile
 
 logger = logging.getLogger(__name__)
 
+
+def _pcm_to_wav(pcm_bytes: bytes, sample_rate: int = 48000, channels: int = 1) -> bytes:
+    """Wrap raw PCM s16le in WAV header. Required for Cartesia STT API."""
+    import struct
+    num_samples = len(pcm_bytes) // 2
+    data_size = num_samples * 2
+    header_size = 44
+    file_size = header_size + data_size
+    wav = b'RIFF'
+    wav += struct.pack('<I', file_size - 8)
+    wav += b'WAVE'
+    wav += b'fmt '
+    wav += struct.pack('<I', 16)
+    wav += struct.pack('<H', 1)  # PCM
+    wav += struct.pack('<H', channels)
+    wav += struct.pack('<I', sample_rate)
+    wav += struct.pack('<I', sample_rate * channels * 2)
+    wav += struct.pack('<H', channels * 2)
+    wav += struct.pack('<H', 16)
+    wav += b'data'
+    wav += struct.pack('<I', data_size)
+    wav += pcm_bytes
+    return wav
+
+
 # Check for Cartesia SDK
 try:
     from cartesia import Cartesia
@@ -99,10 +124,11 @@ class CartesiaService:
                 except Exception as e:
                     logger.debug(f"Could not store audio preview in Redis: {e}")
             
-            # Create temporary WAV file for upload
+            # LiveKit sends 48kHz mono PCM; wrap in proper WAV header (raw PCM is NOT valid WAV)
+            wav_bytes = _pcm_to_wav(audio_buffer, sample_rate=48000, channels=1)
             with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
                 wav_path = temp_file.name
-                temp_file.write(audio_buffer)
+                temp_file.write(wav_bytes)
             
             try:
                 # Use Cartesia Batch API endpoint
@@ -118,7 +144,7 @@ class CartesiaService:
                     "timestamp_granularities[]": "word",
                 }
                 
-                logger.info(f"📤 Cartesia Batch STT: Uploading {len(audio_buffer)} bytes...")
+                logger.info(f"📤 Cartesia Batch STT: Uploading {len(wav_bytes)} bytes WAV (48kHz)...")
                 
                 response = httpx.post(
                     "https://api.cartesia.ai/stt",
