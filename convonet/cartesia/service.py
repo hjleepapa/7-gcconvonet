@@ -209,17 +209,26 @@ class CartesiaService:
                 # ChunkEvent is a Pydantic model with direct attribute access
                 # Audio data is base64-encoded in the 'audio' attribute
                 if hasattr(chunk_event, 'audio') and chunk_event.audio:
-                    # Decode base64 audio to bytes (streaming chunks may lack padding)
-                    audio_b64 = chunk_event.audio
-                    if isinstance(audio_b64, str):
-                        audio_b64 = audio_b64.encode('ascii')
-                    # Add padding so length is multiple of 4 (required for b64decode)
-                    audio_b64 = audio_b64 + b'=' * (-len(audio_b64) % 4)
-                    chunk = base64.b64decode(audio_b64)
-                    chunk_count += 1
-                    if chunk_count == 1:
-                        logger.info(f"🎵 Received first TTS chunk ({len(chunk)} bytes)")
-                    yield chunk
+                    try:
+                        # Decode base64 audio to bytes (streaming chunks may lack padding or have invalid chars)
+                        audio_b64 = chunk_event.audio
+                        if isinstance(audio_b64, str):
+                            audio_b64 = audio_b64.encode('ascii')
+                        # Strip whitespace/newlines that can cause "data characters" validation errors
+                        audio_b64 = audio_b64.replace(b'\n', b'').replace(b'\r', b'').replace(b' ', b'')
+                        # Add padding so length is multiple of 4 (required for b64decode)
+                        pad_len = (-len(audio_b64) % 4)
+                        if pad_len:
+                            audio_b64 = audio_b64 + b'=' * pad_len
+                        # Use validate=False for lenient decode (handles edge cases in streaming)
+                        chunk = base64.b64decode(audio_b64, validate=False)
+                        chunk_count += 1
+                        if chunk_count == 1:
+                            logger.info(f"🎵 Received first TTS chunk ({len(chunk)} bytes)")
+                        yield chunk
+                    except Exception as decode_err:
+                        # Skip corrupted chunks (e.g. 169 chars = 4k+1 invalid) to keep stream alive
+                        logger.warning(f"⚠️ Cartesia TTS: Skipping chunk (decode error: {decode_err})", flush=True)
             
             logger.info(f"✅ Cartesia TTS stream complete: {chunk_count} chunks")
                 

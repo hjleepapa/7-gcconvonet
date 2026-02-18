@@ -10,6 +10,7 @@ API Reference: https://www.assemblyai.com/docs/api-reference/streaming-api/strea
 
 import os
 import json
+import time
 import asyncio
 import threading
 from typing import Optional, Callable, Dict, List
@@ -458,15 +459,136 @@ def remove_assemblyai_streaming_session(session_id: str) -> bool:
     return False
 
 
-def transcribe_with_assemblyai(audio_bytes: bytes) -> str:
+def _pcm_to_wav(pcm_bytes: bytes, sample_rate: int = 16000, channels: int = 1) -> bytes:
+    """Wrap raw PCM s16le in WAV header."""
+    import struct
+    num_samples = len(pcm_bytes) // 2
+    data_size = num_samples * 2
+    header_size = 44
+    file_size = header_size + data_size
+    # WAV header
+    wav = b'RIFF'
+    wav += struct.pack('<I', file_size - 8)
+    wav += b'WAVE'
+    wav += b'fmt '
+    wav += struct.pack('<I', 16)  # fmt chunk size
+    wav += struct.pack('<H', 1)    # PCM format
+    wav += struct.pack('<H', channels)
+    wav += struct.pack('<I', sample_rate)
+    wav += struct.pack('<I', sample_rate * channels * 2)  # byte rate
+    wav += struct.pack('<H', channels * 2)  # block align
+    wav += struct.pack('<H', 16)  # bits per sample
+    wav += b'data'
+    wav += struct.pack('<I', data_size)
+    wav += pcm_bytes
+    return wav
+
+
+def transcribe_with_assemblyai_batch(audio_bytes: bytes, sample_rate: int = 16000, timeout: float = 30.0) -> str:
     """
-    Convenience function for one-shot transcription
+    Transcribe using AssemblyAI REST upload + transcript API (more reliable for buffers).
     
     Args:
-        audio_bytes: Audio buffer to transcribe
+        audio_bytes: PCM s16le audio at sample_rate
+        sample_rate: Audio sample rate (default 16000)
+        timeout: Max seconds to wait for transcript
+        
+    Returns:
+        Transcribed text or empty string on failure
+    """
+    api_key = os.getenv('ASSEMBLYAI_API_KEY')
+    if not api_key:
+        print("❌ AssemblyAI: ASSEMBLYAI_API_KEY not set", flush=True)
+        return ""
+    
+    try:
+        import httpx
+        wav_bytes = _pcm_to_wav(audio_bytes, sample_rate=sample_rate)
+        print(f"🎙️ AssemblyAI batch: Uploading {len(wav_bytes)} bytes WAV...", flush=True)
+        
+        with httpx.Client(timeout=30.0) as client:
+            # Upload
+            upload_resp = client.post(
+                "https://api.assemblyai.com/v2/upload",
+                headers={"Authorization": api_key, "Content-Type": "application/octet-stream"},
+                content=wav_bytes
+            )
+            if upload_resp.status_code != 200:
+                print(f"❌ AssemblyAI upload failed: {upload_resp.status_code} - {upload_resp.text}", flush=True)
+                return ""
+            upload_url = upload_resp.json().get("upload_url")
+            if not upload_url:
+                print("❌ AssemblyAI: No upload_url in response", flush=True)
+                return ""
+            
+            # Create transcript
+            transcript_resp = client.post(
+                "https://api.assemblyai.com/v2/transcript",
+                headers={"Authorization": api_key, "Content-Type": "application/json"},
+                json={"audio_url": upload_url}
+            )
+            if transcript_resp.status_code not in (200, 201):
+                print(f"❌ AssemblyAI transcript create failed: {transcript_resp.status_code}", flush=True)
+                return ""
+            transcript_id = transcript_resp.json().get("id")
+            if not transcript_id:
+                print("❌ AssemblyAI: No transcript id", flush=True)
+                return ""
+            
+            # Poll for completion
+            poll_interval = 0.5
+            elapsed = 0.0
+            while elapsed < timeout:
+                status_resp = client.get(
+                    f"https://api.assemblyai.com/v2/transcript/{transcript_id}",
+                    headers={"Authorization": api_key}
+                )
+                if status_resp.status_code != 200:
+                    break
+                data = status_resp.json()
+                status = data.get("status")
+                if status == "completed":
+                    text = data.get("text", "")
+                    print(f"✅ AssemblyAI batch: {text[:50]}...", flush=True)
+                    return text.strip() if text else ""
+                if status == "error":
+                    print(f"❌ AssemblyAI transcript error: {data.get('error', 'unknown')}", flush=True)
+                    return ""
+                time.sleep(poll_interval)
+                elapsed += poll_interval
+            
+            print("❌ AssemblyAI batch: Timeout waiting for transcript", flush=True)
+            return ""
+    except ImportError:
+        print("❌ AssemblyAI batch: httpx not available", flush=True)
+        return ""
+    except Exception as e:
+        print(f"❌ AssemblyAI batch failed: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        return ""
+
+
+def transcribe_with_assemblyai(audio_bytes: bytes) -> str:
+    """
+    Convenience function for one-shot transcription.
+    Uses batch/upload API (more reliable for recorded buffers); falls back to streaming.
+    
+    Args:
+        audio_bytes: Audio buffer (16kHz PCM s16le) to transcribe
         
     Returns:
         Transcribed text
     """
-    service = AssemblyAIStreamingSTT()
-    return service.transcribe_audio_buffer(audio_bytes)
+    # Prefer batch API - more reliable for "record then transcribe" flow
+    result = transcribe_with_assemblyai_batch(audio_bytes, sample_rate=16000)
+    if result:
+        return result
+    # Fallback to streaming
+    print("⚠️ AssemblyAI batch failed, trying streaming...", flush=True)
+    try:
+        service = AssemblyAIStreamingSTT()
+        return service.transcribe_audio_buffer(audio_bytes)
+    except Exception as e:
+        print(f"❌ AssemblyAI streaming fallback failed: {e}", flush=True)
+        return ""
