@@ -3022,6 +3022,11 @@ def get_tts_providers():
                 "id": "deepgram",
                 "name": "Deepgram",
                 "available": bool(os.getenv('DEEPGRAM_API_KEY'))
+            },
+            {
+                "id": "rime",
+                "name": "Rime",
+                "available": bool(os.getenv('RIME_API_KEY'))
             }
         ]
         return jsonify({
