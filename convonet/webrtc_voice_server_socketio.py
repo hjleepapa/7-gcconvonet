@@ -444,7 +444,7 @@ def _get_stt_provider_for_user(user_id: Optional[str]) -> str:
                 # Redis returns bytes, decode if needed
                 provider = provider_data.decode('utf-8') if isinstance(provider_data, bytes) else provider_data
         except Exception as e:
-            logger.debug(f"⚠️ Could not get user STT provider: {e}")
+            print(f"⚠️ Could not get user STT provider: {e}", flush=True)
     
     # Try global default if no user preference
     if not provider and redis_manager.is_available():
@@ -476,9 +476,9 @@ def _get_tts_provider_for_user(user_id: Optional[str]) -> str:
             if provider_data:
                 # Redis returns bytes, decode if needed
                 provider = provider_data.decode('utf-8') if isinstance(provider_data, bytes) else provider_data
-                logger.info(f"🎵 TTS provider found for user {user_id}: {provider}")
+                print(f"🎵 TTS provider found for user {user_id}: {provider}", flush=True)
         except Exception as e:
-            logger.debug(f"⚠️ Could not get user TTS provider: {e}")
+            print(f"⚠️ Could not get user TTS provider: {e}", flush=True)
     
     # Try global default if no user preference
     if not provider and redis_manager.is_available():
@@ -486,18 +486,18 @@ def _get_tts_provider_for_user(user_id: Optional[str]) -> str:
             provider_data = redis_manager.redis_client.get("user:default:tts_provider")
             if provider_data:
                 provider = provider_data.decode('utf-8') if isinstance(provider_data, bytes) else provider_data
-                logger.info(f"🎵 TTS provider found for default user: {provider}")
+                print(f"🎵 TTS provider found for default user: {provider}", flush=True)
         except Exception as e:
-            logger.debug(f"⚠️ Could not get default TTS provider: {e}")
+            print(f"⚠️ Could not get default TTS provider: {e}", flush=True)
     
     # Fall back to Deepgram if no preference set
     if not provider:
         provider = "deepgram"
-        logger.info(f"🎵 No TTS provider found, using default: {provider}")
+        print(f"🎵 No TTS provider found, using default: {provider}", flush=True)
     
     # Validate provider is in supported list
     if provider not in ["deepgram", "cartesia", "elevenlabs", "rime"]:
-        logger.warning(f"⚠️ Invalid TTS provider '{provider}', falling back to deepgram")
+        print(f"⚠️ Invalid TTS provider '{provider}', falling back to deepgram", flush=True)
         provider = "deepgram"
     
     return provider
