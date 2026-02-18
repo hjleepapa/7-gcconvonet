@@ -93,6 +93,15 @@ except ImportError as e:
     CARTESIA_AVAILABLE = False
     CARTESIA_STREAMING_AVAILABLE = False
 
+# Rime TTS integration
+try:
+    from convonet.rime import RimeTTSService
+    from convonet.rime.service import get_rime_service
+    RIME_AVAILABLE = True
+except ImportError as e:
+    print(f"⚠️ Rime TTS not available: {e}")
+    RIME_AVAILABLE = False
+
 # Import the blueprint (optional - not used in this module)
 # from convonet.routes import convonet_todo_bp
 
@@ -236,6 +245,20 @@ def _synthesize_audio_linear16(text: str, provider: str = "deepgram", voice_id: 
     # Strip markdown formatting
     clean_text = _strip_markdown_for_tts(text)
     
+    if provider == "rime":
+        try:
+            if RIME_AVAILABLE:
+                logger.info(f"🎵 _synthesize_audio_linear16: Using Rime for synthesis (speaker: {voice_id or 'astra'})...")
+                speaker = voice_id or "astra"
+                rime_service = get_rime_service(speaker=speaker)
+                audio_data = rime_service.synthesize(clean_text, speaker=speaker)
+                logger.info(f"✅ _synthesize_audio_linear16: Received {len(audio_data)} bytes from Rime")
+                # Note: Rime returns WAV format, may need conversion for LiveKit PCM
+                return audio_data
+        except Exception as e:
+            logger.error(f"❌ Rime synthesis failed: {e}")
+            # Fallback to deepgram below
+
     if provider == "cartesia":
         try:
             cartesia = get_cartesia_service()
@@ -443,7 +466,7 @@ def _get_stt_provider_for_user(user_id: Optional[str]) -> str:
     return provider
 
 def _get_tts_provider_for_user(user_id: Optional[str]) -> str:
-    """Get TTS provider: 'deepgram', 'cartesia', or 'elevenlabs'"""
+    """Get TTS provider: 'deepgram', 'cartesia', 'elevenlabs', or 'rime'"""
     provider = None
     
     # Try to get user's selection from Redis
@@ -453,6 +476,7 @@ def _get_tts_provider_for_user(user_id: Optional[str]) -> str:
             if provider_data:
                 # Redis returns bytes, decode if needed
                 provider = provider_data.decode('utf-8') if isinstance(provider_data, bytes) else provider_data
+                logger.info(f"🎵 TTS provider found for user {user_id}: {provider}")
         except Exception as e:
             logger.debug(f"⚠️ Could not get user TTS provider: {e}")
     
@@ -462,15 +486,18 @@ def _get_tts_provider_for_user(user_id: Optional[str]) -> str:
             provider_data = redis_manager.redis_client.get("user:default:tts_provider")
             if provider_data:
                 provider = provider_data.decode('utf-8') if isinstance(provider_data, bytes) else provider_data
-        except Exception:
-            pass
+                logger.info(f"🎵 TTS provider found for default user: {provider}")
+        except Exception as e:
+            logger.debug(f"⚠️ Could not get default TTS provider: {e}")
     
     # Fall back to Deepgram if no preference set
     if not provider:
         provider = "deepgram"
+        logger.info(f"🎵 No TTS provider found, using default: {provider}")
     
     # Validate provider is in supported list
-    if provider not in ["deepgram", "cartesia", "elevenlabs"]:
+    if provider not in ["deepgram", "cartesia", "elevenlabs", "rime"]:
+        logger.warning(f"⚠️ Invalid TTS provider '{provider}', falling back to deepgram")
         provider = "deepgram"
     
     return provider

@@ -3082,6 +3082,7 @@ def set_user_tts_provider():
             return jsonify({'success': False, 'error': 'Invalid provider'}), 400
             
         redis_manager.set(f"user:{user_id}:tts_provider", provider)
+        print(f"💾 TTS provider set in Redis: user:{user_id}:tts_provider = {provider}", flush=True)
         return jsonify({
             'success': True,
             'message': f'TTS provider set to {provider}'
