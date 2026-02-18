@@ -202,6 +202,10 @@ class InworldTTSService:
                 "text": text,
                 "voiceId": "Ashley",
                 "modelId": "inworld-tts-1.5-mini",
+                "audioConfig": {
+                    "audioEncoding": "LINEAR16",
+                    "sampleRateHertz": 48000,
+                },
             }
             resp = httpx.post(
                 "https://api.inworld.ai/tts/v1/voice",

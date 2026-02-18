@@ -46,8 +46,9 @@ class RimeTTSService:
         self.speaker = speaker
         self.model_id = model_id
         self.audio_format = audio_format
-        
-        self.url = f"wss://users-ws.rime.ai/ws?speaker={speaker}&modelId={model_id}&audioFormat={audio_format}"
+        # Request 48kHz to match LiveKit - default (22.05kHz) played at 48kHz sounds 2x too fast
+        self.sampling_rate = 48000
+        self.url = f"wss://users-ws.rime.ai/ws?speaker={speaker}&modelId={model_id}&audioFormat={audio_format}&samplingRate={self.sampling_rate}"
         self.auth_headers = {
             "Authorization": f"Bearer {self.api_key}"
         } if self.api_key else {}
@@ -64,7 +65,7 @@ class RimeTTSService:
             text_tokens: List of text tokens to synthesize
             
         Returns:
-            Audio bytes in WAV format
+            Raw PCM bytes (16-bit LE) at 48kHz
         """
         if not self.api_key:
             raise ValueError("RIME_API_KEY not set")
@@ -105,7 +106,8 @@ class RimeTTSService:
                         break
             
             logger.info(f"✅ Rime TTS synthesis complete: {len(audio_data)} bytes")
-            return audio_data
+            # Strip WAV header and return raw PCM - LiveKit expects PCM at 48kHz
+            return self._wav_to_pcm(audio_data)
             
         except Exception as e:
             logger.error(f"❌ Rime TTS error: {type(e).__name__}: {e}")
@@ -120,11 +122,11 @@ class RimeTTSService:
             speaker: Override speaker (optional)
             
         Returns:
-            Audio bytes in WAV format
+            Raw PCM bytes (16-bit LE) at 48kHz for LiveKit
         """
         if speaker:
             self.speaker = speaker
-            self.url = f"wss://users-ws.rime.ai/ws?speaker={speaker}&modelId={self.model_id}&audioFormat={self.audio_format}"
+            self.url = f"wss://users-ws.rime.ai/ws?speaker={speaker}&modelId={self.model_id}&audioFormat={self.audio_format}&samplingRate={self.sampling_rate}"
         
         # Split text into tokens (word-by-word with spaces)
         # Rime expects tokens to be sent individually
@@ -157,7 +159,7 @@ class RimeTTSService:
             tokens: List of text tokens
             
         Returns:
-            Audio bytes in WAV format
+            Raw PCM bytes (16-bit LE) at 48kHz
         """
         audio_result = []
         exception_result = []
@@ -185,6 +187,32 @@ class RimeTTSService:
         
         return audio_result[0]
     
+    @staticmethod
+    def _wav_to_pcm(wav_bytes: bytes, target_sr: int = 48000) -> bytes:
+        """Strip WAV header, return raw PCM at target_sr. Resamples if WAV sample rate differs."""
+        if len(wav_bytes) < 44:
+            return wav_bytes
+        if wav_bytes[:4] != b"RIFF" or b"WAVE" not in wav_bytes[:12]:
+            return wav_bytes
+        import struct
+        # WAV fmt: bytes 24-27 = sample rate (little-endian)
+        actual_sr = struct.unpack("<I", wav_bytes[24:28])[0]
+        pcm = wav_bytes[44:]
+        if actual_sr == target_sr:
+            return pcm
+        # Resample to 48kHz for LiveKit
+        try:
+            import numpy as np
+            from scipy import signal
+            audio = np.frombuffer(pcm, dtype=np.int16)
+            ratio = target_sr / actual_sr
+            num_samples = int(len(audio) * ratio)
+            resampled = signal.resample(audio, num_samples)
+            return np.clip(resampled, -32768, 32767).astype(np.int16).tobytes()
+        except ImportError:
+            logger.warning("scipy not available, returning PCM at original rate - may sound wrong")
+            return pcm
+
     @staticmethod
     def _tokenize_text(text: str) -> List[str]:
         """
@@ -240,7 +268,7 @@ def get_rime_service(speaker: str = "astra") -> RimeTTSService:
     elif _rime_service.speaker != speaker:
         # Update speaker if different
         _rime_service.speaker = speaker
-        _rime_service.url = f"wss://users-ws.rime.ai/ws?speaker={speaker}&modelId={_rime_service.model_id}&audioFormat={_rime_service.audio_format}"
+        _rime_service.url = f"wss://users-ws.rime.ai/ws?speaker={speaker}&modelId={_rime_service.model_id}&audioFormat={_rime_service.audio_format}&samplingRate={_rime_service.sampling_rate}"
     
     return _rime_service
 
