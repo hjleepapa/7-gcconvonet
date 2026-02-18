@@ -163,7 +163,7 @@ class CartesiaStreamingSTT:
                 "Authorization": f"Bearer {self.api_key}",
             }
             
-            async with websockets.connect(websocket_url, extra_headers=headers) as websocket:
+            async with websockets.connect(websocket_url, additional_headers=headers) as websocket:
                 self.websocket = websocket
                 
                 # Send initialization message with model and language
