@@ -97,7 +97,7 @@ def create_app():
     else:
         async_mode = 'threading'
     print(f"🔌 SocketIO async_mode: {async_mode}")
-    socketio = SocketIO(app, cors_allowed_origins="*", async_mode=async_mode)
+    socketio = SocketIO(app, cors_allowed_origins="*", async_mode=async_mode, manage_session=False)
 
     # --- Register Blueprints ---
     # Import and register blueprints after all extensions are fully configured.

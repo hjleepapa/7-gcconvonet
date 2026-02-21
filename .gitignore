@@ -18,6 +18,8 @@ recordings/
 *.wav
 *.mp3
 *.m4a
+# Exception: processing hold music for voice assistant
+!static/assets/audio/processing.mp3
 
 # Node
 node_modules/

@@ -79,7 +79,7 @@ def create_app():
     # Initialize Socket.IO for WebRTC voice
     # Use 'eventlet' for production (Gunicorn compatibility)
     # Use 'threading' for local development
-    socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
+    socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet', manage_session=False)
 
     # --- Register Blueprints ---
     # Import and register blueprints after all extensions are fully configured.
