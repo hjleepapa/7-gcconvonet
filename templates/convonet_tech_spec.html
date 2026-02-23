@@ -7,11 +7,11 @@
         <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
             <div class="text-center">
                 <h1 class="text-4xl font-bold text-gray-800 mb-4">Convonet Voice AI Productivity System</h1>
-                <p class="text-xl text-gray-600 mb-4">LangGraph + Twilio + MCP + Team Management + Call Transfer + Sentry Monitoring + Redis + Composio + Audio Stream Player + WebRTC Voice Integration</p>
+                <p class="text-xl text-gray-600 mb-4">Multi-LLM (Claude, Gemini, OpenAI) + LiveKit WebRTC + Domain Agents (Productivity, Mortgage, Healthcare) + MCP Tools + Team Collaboration + Call Transfer + Agent Monitor + Sentry</p>
                 
                 <!-- GitHub Repository Link -->
                 <div class="mb-6 flex justify-center items-center gap-4">
-                    <a href="https://github.com/hjleepapa/convonet" 
+                    <a href="https://github.com/hjleepapa/convonet-anthropic" 
                        target="_blank" 
                        rel="noopener noreferrer"
                        class="inline-flex items-center gap-2 px-6 py-3 bg-gray-900 hover:bg-gray-800 text-white rounded-lg transition-colors shadow-md">
@@ -21,7 +21,7 @@
                         <span class="font-semibold">View on GitHub</span>
                     </a>
                     <span class="text-sm text-gray-500">or</span>
-                    <a href="https://github.com/hjleepapa/convonet/releases" 
+                    <a href="https://github.com/hjleepapa/convonet-anthropic/releases" 
                        target="_blank" 
                        rel="noopener noreferrer"
                        class="text-blue-600 hover:text-blue-800 underline">
@@ -34,19 +34,19 @@
                     <span class="bg-green-100 text-green-800 px-3 py-1 rounded-full text-sm font-medium">LangGraph</span>
                     <span class="bg-purple-100 text-purple-800 px-3 py-1 rounded-full text-sm font-medium">MCP (38 Tools)</span>
                     <span class="bg-orange-100 text-orange-800 px-3 py-1 rounded-full text-sm font-medium">LangChain</span>
-                    <span class="bg-red-100 text-red-800 px-3 py-1 rounded-full text-sm font-medium">Claude 3.5 Sonnet</span>
+                    <span class="bg-red-100 text-red-800 px-3 py-1 rounded-full text-sm font-medium">Claude · Gemini · OpenAI</span>
+                    <span class="bg-sky-100 text-sky-800 px-3 py-1 rounded-full text-sm font-medium">LiveKit WebRTC</span>
                     <span class="bg-yellow-100 text-yellow-800 px-3 py-1 rounded-full text-sm font-medium">Google Calendar</span>
                     <span class="bg-pink-100 text-pink-800 px-3 py-1 rounded-full text-sm font-medium">Twilio Voice</span>
-                    <span class="bg-indigo-100 text-indigo-800 px-3 py-1 rounded-full text-sm font-medium">JWT Auth</span>
+                    <span class="bg-indigo-100 text-indigo-800 px-3 py-1 rounded-full text-sm font-medium">Agent Monitor</span>
                     <span class="bg-cyan-100 text-cyan-800 px-3 py-1 rounded-full text-sm font-medium">Team Collaboration</span>
-                    <span class="bg-teal-100 text-teal-800 px-3 py-1 rounded-full text-sm font-medium">FusionPBX Call Transfer</span>
-                    <span class="bg-purple-100 text-purple-800 px-3 py-1 rounded-full text-sm font-medium">Deepgram STT</span>
-                    <span class="bg-rose-100 text-rose-800 px-3 py-1 rounded-full text-sm font-medium">Sentry Monitoring</span>
-                    <span class="bg-lime-100 text-lime-800 px-3 py-1 rounded-full text-sm font-medium">WebRTC Call Center</span>
-                    <span class="bg-amber-100 text-amber-800 px-3 py-1 rounded-full text-sm font-medium">Redis Cache</span>
-                    <span class="bg-violet-100 text-violet-800 px-3 py-1 rounded-full text-sm font-medium">Composio Tools</span>
-                    <span class="bg-emerald-100 text-emerald-800 px-3 py-1 rounded-full text-sm font-medium">Audio Stream Player</span>
-                    <span class="bg-sky-100 text-sky-800 px-3 py-1 rounded-full text-sm font-medium">WebRTC Voice</span>
+                    <span class="bg-teal-100 text-teal-800 px-3 py-1 rounded-full text-sm font-medium">FusionPBX</span>
+                    <span class="bg-purple-100 text-purple-800 px-3 py-1 rounded-full text-sm font-medium">Deepgram STT/TTS</span>
+                    <span class="bg-orange-100 text-orange-800 px-3 py-1 rounded-full text-sm font-medium">ElevenLabs TTS</span>
+                    <span class="bg-emerald-100 text-emerald-800 px-3 py-1 rounded-full text-sm font-medium">Cartesia TTS</span>
+                    <span class="bg-rose-100 text-rose-800 px-3 py-1 rounded-full text-sm font-medium">Sentry</span>
+                    <span class="bg-amber-100 text-amber-800 px-3 py-1 rounded-full text-sm font-medium">Redis</span>
+                    <span class="bg-violet-100 text-violet-800 px-3 py-1 rounded-full text-sm font-medium">Composio</span>
                 </div>
             </div>
         </div>
@@ -104,7 +104,7 @@
                                 <div class="mt-6 space-y-3">
                                     <div class="flex justify-center">
                                         <div class="text-xs text-gray-600 bg-gray-100 px-4 py-2 rounded-lg max-w-4xl w-full">
-                                            <strong>WebRTC Flow:</strong> User Browser → PIN Auth (PostgreSQL) → Redis Audio Buffer → Deepgram STT → LangGraph → Claude LLM → Tool Calling → PostgreSQL/Google APIs → Deepgram TTS → User
+                                            <strong>WebRTC Flow:</strong> User Browser → LiveKit WebRTC → PIN Auth (PostgreSQL) → Streaming STT (Deepgram) → LangGraph → Multi-LLM (Claude/Gemini/OpenAI) → Domain Agents → Tool Calling → Streaming TTS (Deepgram/ElevenLabs/Cartesia) → User
                                         </div>
                                     </div>
                                     <div class="flex justify-center">
@@ -121,9 +121,10 @@
                                 
                                 <div class="mt-6 text-center">
                                     <p class="text-sm text-gray-600">
-                                        <strong>Architecture Flow:</strong> Enterprise voice AI system with PIN authentication (PostgreSQL), team collaboration, 
-                                        intelligent call transfer to FusionPBX call center via Twilio, WebRTC voice integration with Deepgram STT and Redis audio buffering, 
-                                        and comprehensive Sentry error monitoring with automatic thread reset recovery (8s/10s/12s timeout optimization).
+                                        <strong>Architecture Flow:</strong> Enterprise voice AI system with multi-LLM (Claude, Gemini, OpenAI), LiveKit WebRTC, domain-specific agents (Productivity, Mortgage, Healthcare), 
+                                        PIN authentication (PostgreSQL), team collaboration, Agent Monitor for real-time tool/voice timing, 
+                                        intelligent call transfer to FusionPBX via Twilio, streaming STT/TTS (Deepgram, ElevenLabs, Cartesia), 
+                                        and Sentry error monitoring with automatic thread reset recovery.
                                     </p>
                                     <p class="text-sm text-blue-600 mt-3">
                                         <a href="{{ url_for('convonet_system_architecture') }}" class="underline hover:text-blue-800">View System Architecture Diagram</a> | 
@@ -142,33 +143,33 @@
                 <div class="bg-gray-50 p-6 rounded-lg">
                     <p class="text-gray-700 mb-4">
                         The Convonet Voice AI Productivity System is an enterprise-grade platform that combines 
-                        LangGraph AI agents, team collaboration, voice interaction, and intelligent call center integration. 
-                        Built for hackathon demonstrations, it showcases advanced features including PIN authentication, 
-                        role-based access control, call transfer to FreePBX, and production-grade error monitoring with Sentry.
+                        multi-LLM AI (Claude, Gemini, OpenAI), LiveKit WebRTC voice, domain-specific agents (Productivity, Mortgage, Healthcare), 
+                        team collaboration, and intelligent call center integration. Built for hackathon demonstrations, 
+                        it showcases advanced features including PIN authentication, role-based access control, 
+                        Agent Monitor for real-time tool/voice timing, call transfer to FusionPBX, and Sentry monitoring.
                         <br><br>
-                        The system enables teams to manage todos, assign tasks to members, and collaborate in real-time 
-                        through web dashboards, voice commands, and seamless transfer to human agents. Features optimized 
-                        timeout handling (8s/10s/12s), automatic thread reset recovery, and comprehensive error tracking.
-                        All data is synchronized with Google Calendar using OAuth2 authentication, with intelligent caching 
-                        to ensure sub-second voice responses.
+                        The system enables teams to manage todos, assign tasks, and collaborate in real-time 
+                        through web dashboards, voice commands, and seamless transfer to human agents. Voice runs on 
+                        LiveKit WebRTC with streaming STT (Deepgram) and TTS (Deepgram, ElevenLabs, Cartesia). 
+                        All data syncs with Google Calendar via OAuth2, with intelligent caching for sub-second voice responses.
                     </p>
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
                         <div class="bg-white p-4 rounded border">
                             <h4 class="font-semibold text-gray-800 mb-2">Core Technologies</h4>
                             <ul class="text-sm text-gray-600 space-y-1">
                                 <li>• LangGraph for agent orchestration with tools_condition</li>
+                                <li>• Multi-LLM: Claude, Gemini, OpenAI</li>
                                 <li>• Model Context Protocol (MCP) - 38 tools (36 DB + 2 transfer)</li>
                                 <li>• LangChain for LLM integration & tool binding</li>
                                 <li>• Flask + Flask-SocketIO for web API & WebSocket</li>
+                                <li>• LiveKit WebRTC for real-time voice</li>
+                                <li>• Deepgram STT; TTS: Deepgram, ElevenLabs, Cartesia</li>
                                 <li>• SQLAlchemy ORM with PostgreSQL (multi-tenant)</li>
                                 <li>• PIN authentication (4-6 digit voice PIN)</li>
-                                <li>• Anthropic Claude API (Claude 3.5 Sonnet)</li>
-                                <li>• Deepgram APIs (STT & TTS)</li>
+                                <li>• Agent Monitor: real-time tool/voice timing</li>
                                 <li>• Twilio Programmable Voice with Media Streams</li>
                                 <li>• Google Calendar OAuth2 integration (optimized)</li>
                                 <li>• FusionPBX SIP integration for call transfer</li>
-                                <li>• Deepgram Speech-to-Text API for WebRTC</li>
-                                <li>• WebRTC browser-based voice recording</li>
                                 <li>• Sentry.io error monitoring & performance tracking</li>
                                 <li>• JsSIP WebRTC for browser-based softphone</li>
                                 <li>• Render.com auto-deployment with gunicorn+eventlet</li>
@@ -177,17 +178,17 @@
                         <div class="bg-white p-4 rounded border">
                             <h4 class="font-semibold text-gray-800 mb-2">Key Features</h4>
                             <ul class="text-sm text-gray-600 space-y-1">
+                                <li>• Domain-specific agents: Productivity, Mortgage, Healthcare</li>
+                                <li>• LiveKit WebRTC voice with streaming STT/TTS</li>
+                                <li>• Agent Monitor: real-time tool calls & voice timing</li>
                                 <li>• Multi-tenant team collaboration with role hierarchy</li>
                                 <li>• PIN-based voice authentication (4-6 digits)</li>
                                 <li>• Intelligent call transfer: AI → FusionPBX Extension 2001</li>
-                                <li>• WebRTC voice with Deepgram STT transcription</li>
-                                <li>• Redis audio buffer management for WebRTC</li>
+                                <li>• Multi-TTS: Deepgram, ElevenLabs, Cartesia</li>
                                 <li>• Sentry error monitoring & performance tracking</li>
                                 <li>• Optimized timeouts (8s/10s/12s) for Twilio compatibility</li>
-                                <li>• Automatic thread reset on timeout/error</li>
                                 <li>• 38 MCP tools (todos, calendar, teams, transfer)</li>
                                 <li>• WebRTC call center with JsSIP softphone</li>
-                                <li>• Real-time voice AI with barge-in capability</li>
                                 <li>• Google Calendar OAuth2 sync (background)</li>
                                 <li>• FusionPBX integration on Google Cloud VM</li>
                                 <li>• Production deployment on Render with auto-scaling</li>
@@ -199,7 +200,7 @@
 
             <!-- Recent Updates & Improvements -->
             <div class="mb-12">
-                <h3 class="text-2xl font-semibold mb-6 text-gray-800">Recent Updates & Improvements (October 2025)</h3>
+                <h3 class="text-2xl font-semibold mb-6 text-gray-800">Recent Updates & Improvements (January 2026)</h3>
                 <div class="bg-gradient-to-r from-blue-50 to-purple-50 p-6 rounded-lg border-2 border-blue-200">
                     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                         <!-- Call Transfer Feature -->
@@ -224,25 +225,25 @@
                             </div>
                         </div>
 
-                        <!-- Deepgram WebRTC Integration -->
+                        <!-- LiveKit WebRTC + Agent Monitor -->
                         <div class="bg-white p-5 rounded-lg shadow-sm">
                             <div class="flex items-center mb-3">
-                                <span class="bg-purple-100 p-2 rounded-full mr-3">
-                                    <svg class="w-5 h-5 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path>
+                                <span class="bg-sky-100 p-2 rounded-full mr-3">
+                                    <svg class="w-5 h-5 text-sky-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
                                     </svg>
                                 </span>
-                                <h4 class="text-lg font-semibold text-gray-800">Deepgram WebRTC STT</h4>
+                                <h4 class="text-lg font-semibold text-gray-800">LiveKit WebRTC + Agent Monitor</h4>
                             </div>
                             <ul class="text-sm text-gray-600 space-y-1.5">
-                                <li>✓ Real-time speech-to-text transcription</li>
-                                <li>✓ WebRTC audio stream processing</li>
-                                <li>✓ WebM format detection & handling</li>
-                                <li>✓ High accuracy transcription (95%+)</li>
-                                <li>✓ Low latency (200-500ms)</li>
+                                <li>✓ LiveKit real-time voice (WebRTC)</li>
+                                <li>✓ Streaming STT (Deepgram) & TTS (Deepgram/ElevenLabs/Cartesia)</li>
+                                <li>✓ Domain agents: Productivity, Mortgage, Healthcare</li>
+                                <li>✓ Agent Monitor: tool calls & voice timing</li>
+                                <li>✓ Processing music during agent response</li>
                             </ul>
                             <div class="mt-3 text-xs text-gray-500">
-                                <strong>Files:</strong> deepgram_service.py, deepgram_webrtc_integration.py
+                                <strong>Files:</strong> webrtc_voice_server_socketio.py, agent_monitor.py, deepgram/
                             </div>
                         </div>
 
@@ -405,42 +406,42 @@
                 </div>
             </div>
 
-            <!-- WebRTC Voice Integration Architecture -->
+            <!-- LiveKit WebRTC Voice Integration Architecture -->
             <div class="mb-12">
-                <h3 class="text-2xl font-semibold mb-6 text-gray-800">WebRTC Voice Integration Architecture</h3>
+                <h3 class="text-2xl font-semibold mb-6 text-gray-800">LiveKit WebRTC Voice Integration Architecture</h3>
                 <div class="bg-gradient-to-r from-sky-50 to-blue-50 p-6 rounded-lg border-2 border-sky-200">
                     <p class="text-gray-700 mb-6">
-                        The WebRTC Voice Interface provides browser-based voice interaction with real-time audio streaming, 
-                        Redis session management, and seamless integration with the LangGraph AI agent. Users can interact 
-                        with the assistant directly through their web browser without requiring phone calls.
+                        The LiveKit WebRTC Voice Interface provides browser-based voice interaction with real-time audio streaming via LiveKit, 
+                        domain-specific agents (Productivity, Mortgage, Healthcare), streaming STT (Deepgram) and TTS (Deepgram, ElevenLabs, Cartesia), 
+                        and seamless integration with the LangGraph AI agent. Users interact with the assistant directly through their web browser.
                     </p>
                     
                     <div class="mb-6 text-center">
-                        <a href="https://hjlees.com/convonet_todo/webrtc/voice-assistant" 
+                        <a href="{{ url_for('webrtc_voice.voice_assistant') }}" 
                            target="_blank" 
                            rel="noopener noreferrer"
                            class="inline-flex items-center gap-2 px-6 py-3 bg-sky-600 hover:bg-sky-700 text-white rounded-lg transition-colors shadow-md">
                             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path>
                             </svg>
-                            <span class="font-semibold">Try WebRTC Voice Assistant →</span>
+                            <span class="font-semibold">Try LiveKit Voice Assistant →</span>
                         </a>
                         <p class="text-xs text-gray-500 mt-2">
-                            <a href="https://hjlees.com/convonet_todo/webrtc/voice-assistant" 
+                            <a href="{{ url_for('webrtc_voice.voice_assistant') }}" 
                                target="_blank" 
                                rel="noopener noreferrer"
                                class="text-blue-600 hover:text-blue-800 underline">
-                                https://hjlees.com/convonet_todo/webrtc/voice-assistant
+                                /webrtc/voice-assistant
                             </a>
                         </p>
                     </div>
                     
                     <div class="mb-8">
-                        <h4 class="text-lg font-semibold mb-4 text-gray-800">WebRTC Voice Assistant Architecture</h4>
+                        <h4 class="text-lg font-semibold mb-4 text-gray-800">LiveKit Voice Assistant Architecture</h4>
                         <div class="bg-white p-6 rounded-lg border-2 border-gray-200">
                             <!-- WebRTC Speech-to-Deepgram Flow Diagram -->
                             <div class="mb-8">
-                                <h5 class="text-lg font-semibold mb-4 text-gray-800">WebRTC Speech-to-Deepgram Processing Flow</h5>
+                                <h5 class="text-lg font-semibold mb-4 text-gray-800">LiveKit WebRTC Processing Flow</h5>
                                 <div class="bg-gray-50 p-4 rounded-lg border">
                                     <div class="flex justify-center items-center space-x-4">
                                         <!-- Browser -->
@@ -520,7 +521,7 @@
                                     <!-- Flow Description -->
                                     <div class="mt-4 text-center">
                                         <p class="text-xs text-gray-600">
-                                            <strong>Corrected Flow:</strong> User Browser → PIN Auth (PostgreSQL) → WebRTC Audio Capture → Socket.IO Streaming → Redis Audio Buffer → Deepgram STT → LangGraph → Claude LLM → Tool Calling (PostgreSQL/Google APIs) → Deepgram TTS → Redis Buffer → Socket.IO → User Browser
+                                            <strong>Flow:</strong> User Browser → LiveKit WebRTC → PIN Auth (PostgreSQL) → Streaming STT (Deepgram) → LangGraph → Multi-LLM (Claude/Gemini/OpenAI) → Domain Agents → Tool Calling → Streaming TTS (Deepgram/ElevenLabs/Cartesia) → User Browser
                                         </p>
                                     </div>
                                 </div>
@@ -548,7 +549,7 @@
                                     <div class="border-l-4 border-green-500 pl-4">
                                         <h6 class="font-semibold text-gray-800 mb-1">Phase 2: Conversation Loop</h6>
                                         <p class="text-xs text-gray-600 mb-2">Steps 8-31</p>
-                                        <p class="text-sm text-gray-600">Audio capture → Redis buffer → Deepgram STT → LangGraph → Claude LLM → Tool execution → Deepgram TTS → Response</p>
+                                        <p class="text-sm text-gray-600">LiveKit audio → Streaming STT (Deepgram) → LangGraph → Multi-LLM → Domain agents → Tool execution → Streaming TTS (Deepgram/ElevenLabs/Cartesia) → Response</p>
                                     </div>
                                     
                                     <!-- Phase 3: Transfer Request -->
@@ -569,9 +570,10 @@
                             
                             <div class="mt-6 text-center">
                                 <p class="text-sm text-gray-600">
-                                    <strong>WebRTC Architecture:</strong> Browser-based voice assistant with PostgreSQL PIN authentication, Redis session and audio buffer management, 
-                                    real-time audio streaming via Socket.IO, Deepgram STT transcription (not Twilio), LangGraph AI orchestration with Claude LLM and Deepgram TTS, 
-                                    MCP tool integration (PostgreSQL, Google APIs), and seamless transfer to FusionPBX call center via Twilio SIP trunking.
+                                    <strong>LiveKit WebRTC Architecture:</strong> Browser-based voice assistant with LiveKit WebRTC, PostgreSQL PIN authentication, 
+                                    streaming STT (Deepgram) and TTS (Deepgram, ElevenLabs, Cartesia), LangGraph AI orchestration with multi-LLM (Claude, Gemini, OpenAI), 
+                                    domain-specific agents (Productivity, Mortgage, Healthcare), Agent Monitor for real-time tool/voice timing, 
+                                    MCP tool integration, and seamless transfer to FusionPBX via Twilio.
                                 </p>
                             </div>
                             
@@ -758,14 +760,13 @@
 ├── render.yaml                     # Render.com deployment config
 ├── render_memory_optimized.yaml    # Memory-optimized deployment config
 ├── render-build.sh                 # Build script for Render.com
-├── deepgram_service.py             # Deepgram STT service (root level)
-├── deepgram_webrtc_integration.py  # WebRTC Deepgram integration (root level)
 ├── templates/                      # Flask templates
 │   ├── team_dashboard.html         # Team management UI
 │   ├── register.html               # User registration
 │   ├── convonet_tech_spec.html     # Technical documentation
 │   ├── convonet_system_architecture.html  # System architecture diagram
-│   └── convonet_sequence_diagram.html     # Sequence diagram page
+│   ├── convonet_sequence_diagram.html     # Sequence diagram page
+│   └── agent_monitor_dashboard.html       # Agent Monitor (tool/voice timing)
 ├── static/                         # Static assets
 │   └── convonet/                   # Convonet static files
 │       └── assets/                 # Images, CSS, JS
@@ -778,7 +779,9 @@
     ├── routes.py                   # Flask routes & Twilio webhooks (Sentry integrated)
     ├── assistant_graph_todo.py     # LangGraph agent (optimized timeouts)
     ├── state.py                    # Agent state management
-    ├── webrtc_voice_server.py      # WebRTC voice assistant server
+    ├── webrtc_voice_server_socketio.py  # LiveKit WebRTC voice server
+    ├── agent_monitor.py            # Agent Monitor (tool/voice timing)
+    ├── deepgram/                   # Deepgram STT/TTS (streaming)
     ├── audio_player_routes.py      # Audio stream player routes
     ├── redis_manager.py            # Redis session & audio buffer management
     ├── composio_tools.py           # Composio tool integration
@@ -812,7 +815,7 @@
     │       └── js/                 # JavaScript files
     └── templates/                  # Convonet templates
         ├── convonet_todo_index.html  # Main todo interface
-        └── webrtc_voice_assistant.html  # WebRTC voice assistant UI</pre>
+        └── webrtc_voice_assistant.html  # LiveKit voice assistant UI</pre>
                             </div>
                         </div>
                     </div>
@@ -1389,19 +1392,26 @@
                         </div>
                     </div>
                     
-                    <!-- WebRTC Endpoints -->
+                    <!-- LiveKit WebRTC & Agent Monitor Endpoints -->
                     <div class="bg-white p-6 rounded-lg shadow">
-                        <h4 class="text-lg font-semibold mb-3 text-gray-800">WebRTC Voice</h4>
+                        <h4 class="text-lg font-semibold mb-3 text-gray-800">LiveKit WebRTC Voice</h4>
                         <ul class="text-sm text-gray-600 space-y-2">
-                            <li><code class="bg-gray-100 px-2 py-1 rounded text-xs">GET /convonet_todo/webrtc/voice-assistant</code></li>
+                            <li><code class="bg-gray-100 px-2 py-1 rounded text-xs">GET /webrtc/voice-assistant</code></li>
                             <li><code class="bg-gray-100 px-2 py-1 rounded text-xs">WebSocket /voice</code></li>
                             <li><code class="bg-gray-100 px-2 py-1 rounded text-xs">GET /audio-player/</code></li>
                         </ul>
                         <div class="mt-2 p-3 bg-blue-50 rounded">
                             <p class="text-xs text-blue-800">
-                                <strong>Features:</strong> Deepgram STT transcription, Redis audio buffer storage, Socket.IO real-time communication
+                                <strong>Features:</strong> LiveKit WebRTC, streaming STT (Deepgram), TTS (Deepgram/ElevenLabs/Cartesia), domain agents, Agent Monitor
                             </p>
                         </div>
+                    </div>
+                    <div class="bg-white p-6 rounded-lg shadow">
+                        <h4 class="text-lg font-semibold mb-3 text-gray-800">Agent Monitor</h4>
+                        <ul class="text-sm text-gray-600 space-y-2">
+                            <li><code class="bg-gray-100 px-2 py-1 rounded text-xs">GET /agent-monitor/</code></li>
+                        </ul>
+                        <p class="text-xs text-gray-600 mt-2">Real-time tool calls, voice timing, elapsed time per tool</p>
                     </div>
                     
                     <!-- Redis Audio Player Endpoints -->

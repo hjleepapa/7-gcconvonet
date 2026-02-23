@@ -9,7 +9,7 @@
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div class="text-center mb-6">
                 <h1 class="text-4xl font-bold text-gray-800 mb-4">Convonet Sequence Diagram</h1>
-                <p class="text-xl text-gray-600 mb-4">Step-by-Step Flow with All Components</p>
+                <p class="text-xl text-gray-600 mb-4">Multi-LLM · LiveKit WebRTC · Domain Agents · Agent Monitor</p>
                 <div class="flex justify-center gap-4">
                     <a href="{{ url_for('convonet_tech_spec') }}" class="text-blue-600 hover:text-blue-800 underline">
                         ← Back to Tech Spec
@@ -70,7 +70,7 @@
                                 <span class="bg-blue-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">1</span>
                                 <div>
                                     <h4 class="font-semibold text-gray-800 mb-1">User Browser → WebSocket Server: Connect WebSocket</h4>
-                                    <p class="text-sm text-gray-700">User opens the Convonet WebRTC voice assistant UI and establishes a WebSocket connection via Socket.IO to the Flask server.</p>
+                                    <p class="text-sm text-gray-700">User opens the Convonet LiveKit WebRTC voice assistant UI and establishes a WebSocket connection via Socket.IO (or LiveKit) to the Flask server.</p>
                                 </div>
                             </div>
                         </div>
@@ -150,7 +150,7 @@
                                 <span class="bg-green-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">8</span>
                                 <div>
                                     <h4 class="font-semibold text-gray-800 mb-1">User Browser → WebSocket Server: Start Recording</h4>
-                                    <p class="text-sm text-gray-700">User initiates voice recording in the browser, beginning the audio capture process.</p>
+                                    <p class="text-sm text-gray-700">User initiates voice recording in the browser (LiveKit or MediaRecorder), beginning the audio capture process.</p>
                                 </div>
                             </div>
                         </div>
@@ -159,8 +159,8 @@
                             <div class="flex items-start">
                                 <span class="bg-green-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">9</span>
                                 <div>
-                                    <h4 class="font-semibold text-gray-800 mb-1">WebSocket Server → WebRTC Voice Server: Audio Chunks (WebRTC)</h4>
-                                    <p class="text-sm text-gray-700">Audio chunks are streamed from the browser via WebRTC through the WebSocket server to the WebRTC Voice Server.</p>
+                                    <h4 class="font-semibold text-gray-800 mb-1">WebSocket Server → LiveKit WebRTC Voice Server: Audio Chunks</h4>
+                                    <p class="text-sm text-gray-700">Audio chunks are streamed from the browser via LiveKit WebRTC (or Socket.IO) to the LiveKit WebRTC Voice Server (<code class="bg-gray-100 px-1 rounded">webrtc_voice_server_socketio.py</code>).</p>
                                 </div>
                             </div>
                         </div>
@@ -169,7 +169,7 @@
                             <div class="flex items-start">
                                 <span class="bg-green-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">10</span>
                                 <div>
-                                    <h4 class="font-semibold text-gray-800 mb-1">WebRTC Voice Server → Redis: Buffer Audio Data</h4>
+                                    <h4 class="font-semibold text-gray-800 mb-1">LiveKit WebRTC Voice Server → Redis: Buffer Audio Data</h4>
                                     <p class="text-sm text-gray-700">Each session's audio chunks are appended to a Redis buffer (convonet.redis_manager) so downstream workers can read them for processing.</p>
                                 </div>
                             </div>
@@ -180,8 +180,8 @@
                                 <span class="bg-green-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">11-12</span>
                                 <div>
                                     <h4 class="font-semibold text-gray-800 mb-1">Redis → Deepgram STT: Send Audio Buffer → Transcribed Text</h4>
-                                    <p class="text-sm text-gray-700">The WebRTC worker reads the current buffer and forwards it to Deepgram (not Twilio) for high-fidelity transcription. Deepgram returns the recognized text back to the WebRTC service.</p>
-                                    <p class="text-xs text-gray-500 mt-1"><strong>Important:</strong> Deepgram STT is used for WebRTC audio, not Twilio transcription.</p>
+                                    <p class="text-sm text-gray-700">The voice server reads the buffer and forwards it to streaming Deepgram STT for transcription. Deepgram returns the recognized text back to the voice service.</p>
+                                    <p class="text-xs text-gray-500 mt-1"><strong>Important:</strong> Deepgram STT is used for voice audio, not Twilio transcription.</p>
                                 </div>
                             </div>
                         </div>
@@ -190,8 +190,8 @@
                             <div class="flex items-start">
                                 <span class="bg-green-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">13-15</span>
                                 <div>
-                                    <h4 class="font-semibold text-gray-800 mb-1">WebRTC Voice Server → LangGraph → Claude LLM: Process Intent</h4>
-                                    <p class="text-sm text-gray-700">The transcript enters the LangGraph assistant (Convonet's LangGraph state machine). LangGraph calls Claude (LLM) for reasoning and response generation. LLM returns response and tool calls to LangGraph.</p>
+                                    <h4 class="font-semibold text-gray-800 mb-1">LiveKit WebRTC Voice Server → LangGraph → Multi-LLM: Process Intent</h4>
+                                    <p class="text-sm text-gray-700">The transcript enters the LangGraph assistant. LangGraph calls the selected LLM (Claude, Gemini, or OpenAI) for reasoning and response generation. Domain agents (Productivity, Mortgage, Healthcare) may be invoked. Agent Monitor tracks the interaction. LLM returns response and tool calls to LangGraph.</p>
                                 </div>
                             </div>
                         </div>
@@ -201,13 +201,13 @@
                                 <span class="bg-green-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">16-21</span>
                                 <div>
                                     <h4 class="font-semibold text-gray-800 mb-1">Tool Execution (If Needed)</h4>
-                                    <p class="text-sm text-gray-700">If the LLM decides to execute an action, LangGraph invokes registered tools:</p>
+                                    <p class="text-sm text-gray-700">If the LLM decides to execute an action, LangGraph invokes registered MCP tools. Agent Monitor records each tool call with elapsed time.</p>
                                     <ul class="text-sm text-gray-700 list-disc list-inside mt-1 space-y-1">
                                         <li><strong>Database Operations:</strong> PostgreSQL queries/updates via SQLAlchemy</li>
                                         <li><strong>Calendar Operations:</strong> Google Calendar/OAuth workflows</li>
                                         <li><strong>PBX Metadata:</strong> FusionPBX lookups for call metadata</li>
                                     </ul>
-                                    <p class="text-sm text-gray-700 mt-2">Tool results are injected back into the LangGraph state, and Claude composes the final reply.</p>
+                                    <p class="text-sm text-gray-700 mt-2">Tool results are injected back into the LangGraph state, and the LLM composes the final reply.</p>
                                 </div>
                             </div>
                         </div>
@@ -216,8 +216,8 @@
                             <div class="flex items-start">
                                 <span class="bg-green-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">22-24</span>
                                 <div>
-                                    <h4 class="font-semibold text-gray-800 mb-1">LangGraph → Claude LLM → LangGraph: Generate Final Response</h4>
-                                    <p class="text-sm text-gray-700">LangGraph sends context to Claude LLM for final response generation. LLM returns response text to LangGraph, which passes it to the WebRTC Voice Server.</p>
+                                    <h4 class="font-semibold text-gray-800 mb-1">LangGraph → Multi-LLM → LangGraph: Generate Final Response</h4>
+                                    <p class="text-sm text-gray-700">LangGraph sends context to the selected LLM (Claude, Gemini, or OpenAI) for final response generation. LLM returns response text to LangGraph, which passes it to the LiveKit WebRTC Voice Server.</p>
                                 </div>
                             </div>
                         </div>
@@ -226,8 +226,8 @@
                             <div class="flex items-start">
                                 <span class="bg-green-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">25-31</span>
                                 <div>
-                                    <h4 class="font-semibold text-gray-800 mb-1">Deepgram TTS → Redis → WebSocket → User: Audio Response</h4>
-                                    <p class="text-sm text-gray-700">Final text is synthesized via Deepgram TTS. The audio response is streamed back over Socket.IO to the browser for playback. Audio is buffered in Redis before streaming to ensure smooth playback.</p>
+                                    <h4 class="font-semibold text-gray-800 mb-1">Streaming TTS → Redis → WebSocket → User: Audio Response</h4>
+                                    <p class="text-sm text-gray-700">Final text is synthesized via streaming TTS (Deepgram, ElevenLabs, or Cartesia). The audio response is streamed back over Socket.IO/LiveKit to the browser for playback. Audio may be buffered in Redis for smooth playback.</p>
                                 </div>
                             </div>
                         </div>
@@ -260,8 +260,8 @@
                             <div class="flex items-start">
                                 <span class="bg-yellow-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">31-32</span>
                                 <div>
-                                    <h4 class="font-semibold text-gray-800 mb-1">WebSocket Server → WebRTC Voice Server → LangGraph: Transfer Intent</h4>
-                                    <p class="text-sm text-gray-700">Transfer intent is passed through the WebRTC Voice Server to LangGraph for detection and processing.</p>
+                                    <h4 class="font-semibold text-gray-800 mb-1">WebSocket Server → LiveKit WebRTC Voice Server → LangGraph: Transfer Intent</h4>
+                                    <p class="text-sm text-gray-700">Transfer intent is passed through the LiveKit WebRTC Voice Server to LangGraph for detection and processing.</p>
                                 </div>
                             </div>
                         </div>
@@ -270,8 +270,8 @@
                             <div class="flex items-start">
                                 <span class="bg-yellow-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">33-34</span>
                                 <div>
-                                    <h4 class="font-semibold text-gray-800 mb-1">LangGraph → Claude LLM: Detect Transfer Intent → Transfer Command</h4>
-                                    <p class="text-sm text-gray-700">LangGraph detects transfer intent and confirms with Claude LLM. LLM returns a transfer command to LangGraph.</p>
+                                    <h4 class="font-semibold text-gray-800 mb-1">LangGraph → Multi-LLM: Detect Transfer Intent → Transfer Command</h4>
+                                    <p class="text-sm text-gray-700">LangGraph detects transfer intent and confirms with the selected LLM. LLM returns a transfer command to LangGraph.</p>
                                 </div>
                             </div>
                         </div>
@@ -290,8 +290,8 @@
                             <div class="flex items-start">
                                 <span class="bg-yellow-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">36-38</span>
                                 <div>
-                                    <h4 class="font-semibold text-gray-800 mb-1">LangGraph → WebRTC Voice Server → WebSocket Server → User: Transfer Initiated</h4>
-                                    <p class="text-sm text-gray-700">Transfer initiated signal flows back through the system. WebRTC Voice Server sends transfer event to WebSocket Server, which notifies the user browser. User sees transfer status update.</p>
+                                    <h4 class="font-semibold text-gray-800 mb-1">LangGraph → LiveKit WebRTC Voice Server → WebSocket Server → User: Transfer Initiated</h4>
+                                    <p class="text-sm text-gray-700">Transfer initiated signal flows back through the system. LiveKit WebRTC Voice Server sends transfer event to WebSocket Server, which notifies the user browser. User sees transfer status update.</p>
                                 </div>
                             </div>
                         </div>
@@ -310,8 +310,8 @@
                             <div class="flex items-start">
                                 <span class="bg-pink-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">39</span>
                                 <div>
-                                    <h4 class="font-semibold text-gray-800 mb-1">WebRTC Voice Server → Twilio API: POST /voice_assistant/transfer_bridge</h4>
-                                    <p class="text-sm text-gray-700">The WebRTC backend calls the Convonet /twilio/voice_assistant/transfer_bridge endpoint. Twilio uses the provided SIP URI: <code class="bg-gray-100 px-1 rounded">sip:2001@FREEPBX_DOMAIN;transport=udp</code> or trunk number, depending on .env configuration.</p>
+                                    <h4 class="font-semibold text-gray-800 mb-1">LiveKit WebRTC Voice Server → Twilio API: POST /voice_assistant/transfer_bridge</h4>
+                                    <p class="text-sm text-gray-700">The voice backend calls the Convonet /twilio/voice_assistant/transfer_bridge endpoint. Twilio uses the provided SIP URI: <code class="bg-gray-100 px-1 rounded">sip:2001@FREEPBX_DOMAIN;transport=udp</code> or trunk number, depending on .env configuration.</p>
                                 </div>
                             </div>
                         </div>
@@ -365,8 +365,8 @@
                                     <p class="text-sm text-gray-700">If the agent rejects the call or it times out:</p>
                                     <ul class="text-sm text-gray-700 list-disc list-inside mt-1 space-y-1">
                                         <li>FusionPBX notifies Twilio that the call failed</li>
-                                        <li>Twilio sends transfer failed notification to WebRTC Voice Server</li>
-                                        <li>WebRTC Voice Server sends transfer error event to WebSocket Server</li>
+                                        <li>Twilio sends transfer failed notification to LiveKit WebRTC Voice Server</li>
+                                        <li>LiveKit WebRTC Voice Server sends transfer error event to WebSocket Server</li>
                                         <li>User browser displays transfer failed message</li>
                                     </ul>
                                 </div>
@@ -390,15 +390,19 @@
                     </div>
                     <div class="bg-white p-4 rounded">
                         <h4 class="font-semibold text-gray-800 mb-2">Audio Processing</h4>
-                        <p class="text-sm text-gray-700">Deepgram STT is used for WebRTC audio transcription, not Twilio. Redis buffers audio chunks for processing.</p>
+                        <p class="text-sm text-gray-700">Streaming Deepgram STT for voice transcription. TTS via Deepgram, ElevenLabs, or Cartesia. Redis buffers audio chunks when needed.</p>
                     </div>
                     <div class="bg-white p-4 rounded">
                         <h4 class="font-semibold text-gray-800 mb-2">AI Orchestration</h4>
-                        <p class="text-sm text-gray-700">LangGraph coordinates between OpenAI LLM and MCP tools. Tool execution happens before final response generation.</p>
+                        <p class="text-sm text-gray-700">LangGraph coordinates between Multi-LLM (Claude, Gemini, OpenAI), domain agents, and MCP tools. Agent Monitor tracks tool calls and voice timing.</p>
                     </div>
                     <div class="bg-white p-4 rounded">
                         <h4 class="font-semibold text-gray-800 mb-2">Transfer Mechanism</h4>
-                        <p class="text-sm text-gray-700">Twilio bridges the WebRTC user leg to the SIP agent leg. Audio transitions from WebRTC to PSTN/SIP stream.</p>
+                        <p class="text-sm text-gray-700">Twilio bridges the LiveKit WebRTC user leg to the SIP agent leg. Audio transitions from WebRTC to PSTN/SIP stream.</p>
+                    </div>
+                    <div class="bg-white p-4 rounded">
+                        <h4 class="font-semibold text-gray-800 mb-2">Agent Monitor</h4>
+                        <p class="text-sm text-gray-700">Real-time observability at /agent-monitor/. Tracks tool calls with elapsed time and voice timing (buffer capture, STT, agent start, first sentence, first audio).</p>
                     </div>
                 </div>
             </div>
