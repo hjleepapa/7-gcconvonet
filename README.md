@@ -14,11 +14,13 @@ Convonet is a production-ready voice AI productivity system that combines **Lang
 ### Key Features
 
 - 🤖 **Multi-LLM Provider Support**: Switch between Claude (Anthropic), Gemini (Google), and OpenAI
-- 🎤 **Voice Interfaces**: Twilio phone calls and WebRTC browser-based voice
+- 🎤 **Voice Interfaces**: LiveKit WebRTC (low-latency), Twilio phone, streaming STT/TTS
+- 🏠 **Domain-Specific Agents**: Productivity (todos, calendar), Mortgage, Healthcare with sticky context
 - 👥 **Team Collaboration**: Multi-tenant team management with role-based access
-- 🔄 **Call Transfer**: Intelligent AI-to-human agent transfer via FusionPBX
-- 🛠️ **38 MCP Tools**: Database operations, calendar sync, team management
-- 📊 **Production Monitoring**: Sentry error tracking and performance analytics
+- 🔄 **Call Transfer**: Intelligent AI-to-human agent transfer via Twilio/FusionPBX
+- 🛠️ **38 MCP Tools**: Todos, calendar, teams, reminders, mortgage, healthcare, call transfer
+- 📊 **Agent Monitor**: Voice response timing (T0→buffer→STT→agent→first audio), per-tool elapsed time
+- 📈 **Production Monitoring**: Sentry error tracking, Agent Monitor dashboard
 - ⚡ **Optimized Timeouts**: 15s/20s/25s timeouts for reliable operation
 
 ---
@@ -77,8 +79,19 @@ TWILIO_ACCOUNT_SID=your_twilio_sid
 TWILIO_AUTH_TOKEN=your_twilio_token
 TWILIO_PHONE_NUMBER=+1234567890
 
-# Deepgram STT/TTS
+# Speech-to-Text (STT)
 DEEPGRAM_API_KEY=your_deepgram_api_key
+# Cartesia for streaming STT (optional)
+
+# Text-to-Speech (TTS)
+DEEPGRAM_API_KEY=your_deepgram_api_key  # Also used for TTS
+ELEVENLABS_API_KEY=your_elevenlabs_key  # ElevenLabs TTS
+CARTESIA_API_KEY=your_cartesia_key      # Cartesia TTS
+
+# LiveKit WebRTC (for low-latency browser voice)
+LIVEKIT_URL=wss://your-livekit-server
+LIVEKIT_API_KEY=your_api_key
+LIVEKIT_API_SECRET=your_api_secret
 
 # FusionPBX Call Transfer
 FREEPBX_DOMAIN=34.26.59.14
@@ -158,10 +171,10 @@ OPENAI_MODEL=gpt-4o  # Optional, defaults to gpt-4o
 
 ```bash
 # Get available providers
-GET /anthropic/convonet_todo/api/llm-providers
+GET /convonet_todo/api/llm-providers
 
 # Set user provider preference
-POST /anthropic/convonet_todo/api/llm-provider
+POST /convonet_todo/api/llm-provider
 {
   "user_id": "user-uuid",
   "provider": "claude"  # or "gemini" or "openai"
@@ -219,25 +232,27 @@ The system automatically:
 ### System Components
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    Frontend Layer                            │
-├─────────────────────────────────────────────────────────────┤
-│  Team Dashboard  │  WebRTC Voice  │  Twilio Phone Interface │
-└─────────────────────────────────────────────────────────────┘
-                            │
-┌─────────────────────────────────────────────────────────────┐
-│                  Core Processing Layer                       │
-├─────────────────────────────────────────────────────────────┤
-│  LangGraph Agent  │  MCP Tools (38)  │  Call Transfer      │
-│  (Multi-LLM)     │  Team API         │  Sentry Monitoring   │
-└─────────────────────────────────────────────────────────────┘
-                            │
-┌─────────────────────────────────────────────────────────────┐
-│                 External Services Layer                       │
-├─────────────────────────────────────────────────────────────┤
-│  Claude/Gemini/OpenAI  │  PostgreSQL  │  Google Calendar    │
-│  Deepgram STT/TTS      │  Redis       │  FusionPBX          │
-└─────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                        Frontend Layer                                │
+├─────────────────────────────────────────────────────────────────────┤
+│  Team Dashboard  │  LiveKit WebRTC Voice  │  Twilio  │  Agent Monitor │
+│  Mortgage Dashboard  │  Tool Execution GUI  │  Call Center          │
+└─────────────────────────────────────────────────────────────────────┘
+                                    │
+┌─────────────────────────────────────────────────────────────────────┐
+│                     Core Processing Layer                            │
+├─────────────────────────────────────────────────────────────────────┤
+│  LangGraph Agent (Multi-LLM)  │  Domain Agents (Todo/Mortgage/Healthcare) │
+│  MCP Tools (38)  │  Call Transfer  │  Sentry  │  Agent Monitor       │
+└─────────────────────────────────────────────────────────────────────┘
+                                    │
+┌─────────────────────────────────────────────────────────────────────┐
+│                    External Services Layer                           │
+├─────────────────────────────────────────────────────────────────────┤
+│  Claude/Gemini/OpenAI  │  PostgreSQL  │  Google Calendar             │
+│  Deepgram/Cartesia STT  │  ElevenLabs/Deepgram/Cartesia TTS  │  LiveKit │
+│  Redis  │  FusionPBX  │  Twilio                                      │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Technology Stack
@@ -245,10 +260,10 @@ The system automatically:
 - **Backend**: Flask, Flask-SocketIO, SQLAlchemy
 - **AI Framework**: LangGraph, LangChain
 - **LLM Providers**: Claude (Anthropic), Gemini (Google), OpenAI
-- **Voice**: Twilio Voice API, WebRTC, Deepgram STT/TTS
+- **Voice**: LiveKit WebRTC, Twilio Voice API, Deepgram/Cartesia STT, ElevenLabs/Deepgram/Cartesia TTS
 - **Database**: PostgreSQL (multi-tenant)
 - **Cache**: Redis (sessions, audio buffers)
-- **Monitoring**: Sentry.io
+- **Monitoring**: Sentry.io, Agent Monitor (voice timing, tool calls)
 - **Deployment**: Render.com, Gunicorn + Eventlet
 
 ---
@@ -257,16 +272,43 @@ The system automatically:
 
 Comprehensive documentation is available in the [`docs/`](docs/) folder:
 
-- **[LLM Provider Selection Guide](docs/LLM_PROVIDER_SELECTION_GUIDE.md)** - Detailed guide on using multiple LLM providers
+- **[LLM Provider Selection Guide](docs/LLM_PROVIDER_SELECTION_GUIDE.md)** - Using multiple LLM providers
 - **[Deployment Guide](docs/RENDER_DEPLOYMENT.md)** - Production deployment instructions
-- **[WebRTC Voice Guide](docs/WEBRTC_VOICE_GUIDE.md)** - Browser-based voice interface
+- **[WebRTC Voice Guide](docs/WEBRTC_VOICE_GUIDE.md)** - LiveKit browser voice interface
 - **[FusionPBX Integration](docs/FUSIONPBX_GUIDE.md)** - Call transfer setup
 - **[Team Management Guide](docs/TEAM_MANAGEMENT_GUIDE.md)** - Team collaboration features
 - **[Troubleshooting](docs/TRANSFER_TROUBLESHOOTING.md)** - Common issues and solutions
 
+### Key URLs (when running locally)
+
+| Feature | URL |
+|---------|-----|
+| Voice Assistant | `/webrtc/voice-assistant` |
+| Agent Monitor | `/agent-monitor` |
+| Mortgage Dashboard | `/convonet_todo/mortgage/dashboard` |
+| Tool Execution | `/tool-execution` |
+| Team Dashboard | `/team-dashboard` |
+
 ---
 
 ## 🎤 Voice Interfaces
+
+### LiveKit WebRTC Browser Voice
+
+Low-latency browser-based voice assistant with LiveKit:
+
+```
+URL: /webrtc/voice-assistant
+```
+
+**Features**:
+- **LiveKit WebRTC**: Low-latency PCM audio streaming
+- **Streaming STT**: Deepgram or Cartesia real-time transcription
+- **Streaming TTS**: Deepgram streaming for first-sentence latency
+- **TTS Providers**: ElevenLabs (emotion-aware), Deepgram, Cartesia
+- **Domain Agents**: Productivity, Mortgage, Healthcare with sticky context
+- **Processing Music**: Hold music during agent processing
+- **PIN Authentication**: Secure access
 
 ### Twilio Phone Integration
 
@@ -279,26 +321,10 @@ AI: "I've created a high priority todo for reviewing the quarterly report."
 
 **Features**:
 - Speech-to-text via Twilio
-- Text-to-speech via Amazon Polly.Amy
+- Text-to-speech via Deepgram/ElevenLabs
 - Barge-in capability (interrupt AI)
 - 10s speech timeout
 - 15s agent processing timeout
-
-### WebRTC Browser Voice
-
-Access the voice assistant directly from your browser:
-
-```
-URL: /anthropic/webrtc/voice-assistant
-```
-
-**Features**:
-- Browser-based audio recording (WebRTC)
-- Real-time audio streaming via Socket.IO
-- Deepgram STT transcription
-- Redis audio buffer management
-- Deepgram TTS responses
-- PIN authentication
 
 ---
 
@@ -323,6 +349,21 @@ URL: /anthropic/webrtc/voice-assistant
 
 ---
 
+## 🏠 Domain-Specific Agents
+
+Convonet supports domain-specific agents with sticky context:
+
+| Domain | Features |
+|--------|----------|
+| **Productivity** | Todos, reminders, calendar, teams |
+| **Mortgage** | Applications, DTI ratio, required documents, financial info |
+| **Healthcare** | Member info, policy lookup |
+
+- **Sticky Context**: Stays in domain until user explicitly changes topic
+- **Mortgage Dashboard**: `/convonet_todo/mortgage/dashboard`
+
+---
+
 ## 🛠️ MCP Tools (38 Tools)
 
 The system includes 38 Model Context Protocol (MCP) tools:
@@ -333,8 +374,10 @@ The system includes 38 Model Context Protocol (MCP) tools:
 - **Team Tools** (8 tools): Team creation, member management, role changes
 - **Reminders** (4 tools): Create, get, update, delete reminders
 - **Calendar Events** (6 tools): Calendar operations with Google Calendar sync
+- **Mortgage Tools**: Applications, DTI, documents, financial info
+- **Healthcare Tools**: Member and policy operations
 - **Call Transfer** (2 tools): Transfer to FusionPBX agents
-- **Database Tools** (13 tools): Various database operations
+- **Database Tools**: Various database operations
 
 ### Tool Execution
 
@@ -365,6 +408,15 @@ Intelligent AI-to-human agent transfer:
 
 ## 📊 Monitoring & Observability
 
+### Agent Monitor
+
+Web dashboard at `/agent-monitor` for LLM interaction monitoring:
+
+- **Voice Response Timing**: T0 (user stop) → buffer capture → STT → agent start → first sentence → first audio → total
+- **Per-Tool Elapsed Time**: Time from user stop to each tool invocation
+- **Provider/Domain Filtering**: Filter by Claude, Gemini, OpenAI; Todo, Mortgage, Healthcare
+- **STT/TTS Latency**: Per-interaction latency metrics
+
 ### Sentry Integration
 
 - Real-time error tracking
@@ -376,7 +428,7 @@ Intelligent AI-to-human agent transfer:
 ### Performance Metrics
 
 - Agent processing time: Tracked per request
-- Tool execution time: Monitored per tool
+- Tool execution time: Monitored per tool (including elapsed from stop)
 - Timeout rates: Tracked and optimized
 - Error rates: Real-time alerting
 
@@ -446,14 +498,18 @@ See the [API Reference](docs/) for detailed endpoint documentation.
 
 ```
 convonet/
-├── routes.py              # Flask routes & Twilio webhooks
-├── assistant_graph_todo.py # LangGraph agent (multi-LLM)
-├── llm_provider_manager.py # LLM provider management
-├── webrtc_voice_server.py  # WebRTC voice assistant
-├── models/                 # Database models
-├── api_routes/             # RESTful API endpoints
-├── security/               # JWT authentication
-└── mcps/                   # MCP tool servers
+├── routes.py                    # Flask routes, Twilio webhooks, agent execution
+├── assistant_graph_todo.py       # LangGraph agent (multi-LLM)
+├── llm_provider_manager.py      # LLM provider management
+├── webrtc_voice_server_socketio.py  # LiveKit WebRTC voice, streaming STT/TTS
+├── agent_monitor.py             # Agent interaction tracking
+├── agent_monitor_gui.py         # Agent Monitor dashboard
+├── tool_execution_gui.py        # Tool execution viewer
+├── models/                      # Database models (incl. Mortgage)
+├── api_routes/                  # RESTful API endpoints
+├── security/                    # JWT authentication
+├── deepgram/                    # Deepgram STT/TTS integration
+└── mcps/                        # MCP tool servers
 ```
 
 ### Running Tests
@@ -498,6 +554,9 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - **OpenAI** - GPT-4 API
 - **Twilio** - Voice API
 - **Deepgram** - Speech-to-text and text-to-speech
+- **ElevenLabs** - Emotional, multilingual TTS
+- **Cartesia** - Streaming TTS
+- **LiveKit** - WebRTC real-time communication
 - **FusionPBX** - Call center integration
 
 ---
@@ -515,7 +574,6 @@ For issues, questions, or contributions:
 ## 🎯 Roadmap
 
 - [ ] Additional LLM provider support (e.g., Mistral, Cohere)
-- [ ] Enhanced tool execution monitoring
 - [ ] Multi-language support
 - [ ] Advanced analytics dashboard
 - [ ] Mobile app integration
