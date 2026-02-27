@@ -3123,13 +3123,12 @@ def init_socketio(socketio_instance: SocketIO, app):
                     remove_cartesia_streaming_session(session_id)
                     print(f"🛑 Cartesia Streaming STT session stopped for {session_id}", flush=True)
                 elif stt_provider == "modulate":
-                    # Modulate: streaming produces transcript via on_final_transcript, skip batch
+                    # Modulate: streaming may not produce transcript (API format/VAD), fall through to batch
                     streaming_session.stop()
                     print(f"🛑 Modulate Streaming STT session stopped for {session_id}", flush=True)
                     if session_id in streaming_sessions:
                         del streaming_sessions[session_id]
-                    emit('recording_stopped', {'success': True, 'streaming': True})
-                    return
+                    # Fall through to batch transcription (do NOT return early)
                 else:
                     # Deepgram: streaming produced transcript via on_final_transcript, skip batch
                     streaming_session.stop()
