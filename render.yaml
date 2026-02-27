@@ -16,6 +16,8 @@ services:
       - key: ANTHROPIC_API_KEY
       - key: DEEPGRAM_API_KEY
         sync: false
+      - key: TAVILY_API_KEY
+        sync: false
       # LLM Provider API Keys
       - key: GOOGLE_API_KEY
         sync: false
