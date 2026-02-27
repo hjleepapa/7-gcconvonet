@@ -188,6 +188,7 @@ LIVEKIT_URL = os.getenv('LIVEKIT_URL', '').strip()
 LIVEKIT_API_KEY = os.getenv('LIVEKIT_API_KEY', '').strip()
 LIVEKIT_API_SECRET = os.getenv('LIVEKIT_API_SECRET', '').strip()
 LIVEKIT_ROOM_PREFIX = os.getenv('LIVEKIT_ROOM_PREFIX', 'voice-')
+LIVEKIT_IDLE_TIMEOUT_MINUTES = float(os.getenv('LIVEKIT_IDLE_TIMEOUT_MINUTES', '5'))
 
 # LiveKit client CDN fallback URLs (used for proxying to same origin)
 LIVEKIT_CLIENT_URLS = [
@@ -1895,7 +1896,36 @@ def init_socketio(socketio_instance: SocketIO, app):
             print(f"   ❌ LiveKit Initialization failed: {e}", flush=True)
     else:
         print(f"⚠️ LiveKit Config Skipped (One or more conditions failed)", flush=True)
-    
+
+    # LiveKit idle timeout: disconnect rooms when inactive to reduce usage charges
+    def _livekit_idle_checker_loop():
+        while True:
+            try:
+                time.sleep(60)
+                if not _livekit_active() or not livekit_manager:
+                    continue
+                timeout_sec = LIVEKIT_IDLE_TIMEOUT_MINUTES * 60
+                idle_ids = livekit_manager.get_idle_session_ids(timeout_sec)
+                for sid in idle_ids:
+                    try:
+                        livekit_manager.close_session(sid)
+                        socketio.emit(
+                            "livekit_idle_disconnect",
+                            {"reason": "idle", "message": "Disconnected due to inactivity to save usage."},
+                            room=sid,
+                            namespace="/voice",
+                        )
+                        print(f"🔌 LiveKit idle disconnect: {sid} (idle > {LIVEKIT_IDLE_TIMEOUT_MINUTES:.0f} min)", flush=True)
+                    except Exception as e:
+                        print(f"⚠️ LiveKit idle disconnect error for {sid}: {e}", flush=True)
+            except Exception as e:
+                print(f"⚠️ LiveKit idle checker error: {e}", flush=True)
+
+    if LIVEKIT_ENABLED and livekit_manager and livekit_manager.is_available() and LIVEKIT_IDLE_TIMEOUT_MINUTES > 0:
+        _idle_thread = threading.Thread(target=_livekit_idle_checker_loop, daemon=True, name="LiveKitIdleChecker")
+        _idle_thread.start()
+        print(f"   - LiveKit idle checker started (timeout: {LIVEKIT_IDLE_TIMEOUT_MINUTES:.0f} min)", flush=True)
+
     @socketio.on('connect', namespace='/voice')
     def handle_connect():
         """Handle client connection"""
@@ -2720,13 +2750,14 @@ def init_socketio(socketio_instance: SocketIO, app):
                 # NEW: Pipe LiveKit audio directly to streaming session
                 if _livekit_input_active():
                     def livekit_audio_callback(pcm_bytes):
+                        livekit_manager.touch_activity(session_id)
                         if session_id in streaming_sessions:
                             try:
                                 streaming_session = streaming_sessions[session_id]
                                 streaming_session.send_audio(pcm_bytes)
                             except Exception as e:
                                 print(f"⚠️ LiveKit pipe error: {e}", flush=True)
-                    
+
                     livekit_manager.set_audio_callback(session_id, livekit_audio_callback)
                     print(f"🔗 LiveKit audio callback registered for {session_id}", flush=True)
 
@@ -2769,6 +2800,7 @@ def init_socketio(socketio_instance: SocketIO, app):
                 # NEW: Pipe LiveKit audio directly to Cartesia streaming session
                 if _livekit_input_active():
                     def livekit_audio_callback_cartesia(pcm_bytes):
+                        livekit_manager.touch_activity(session_id)
                         # PRIORITY 1 FIX: Check session exists AND is running before sending audio
                         if session_id not in streaming_sessions:
                             return  # Session not initialized yet
@@ -2834,6 +2866,7 @@ def init_socketio(socketio_instance: SocketIO, app):
 
                 if _livekit_input_active():
                     def livekit_audio_callback_modulate(pcm_bytes):
+                        livekit_manager.touch_activity(session_id)
                         if session_id not in streaming_sessions:
                             return
                         sess = streaming_sessions[session_id]

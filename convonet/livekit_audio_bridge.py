@@ -777,27 +777,46 @@ class LiveKitSessionManager:
         self.api_key = api_key
         self.api_secret = api_secret
         self.sessions = {}
+        self.last_activity: Dict[str, float] = {}  # session_id -> timestamp
         self.lock = threading.Lock()
 
     def is_available(self) -> bool:
         return LIVEKIT_AVAILABLE and bool(self.url and self.api_key and self.api_secret)
+
+    def touch_activity(self, session_id: str) -> None:
+        """Update last activity timestamp for idle timeout."""
+        with self.lock:
+            self.last_activity[session_id] = real_time.time()
+
+    def get_idle_session_ids(self, timeout_seconds: float) -> list:
+        """Return session_ids that have been idle longer than timeout_seconds."""
+        now = real_time.time()
+        idle = []
+        with self.lock:
+            for sid, last in list(self.last_activity.items()):
+                if sid in self.sessions and (now - last) >= timeout_seconds:
+                    idle.append(sid)
+        return idle
 
     def ensure_session(self, session_id: str, room_name: str, assistant_identity: str) -> Optional[LiveKitRoomSession]:
         if not self.is_available():
             return None
         with self.lock:
             if session_id in self.sessions:
+                self.last_activity[session_id] = real_time.time()
                 return self.sessions[session_id]
             token = generate_livekit_token(self.api_key, self.api_secret, assistant_identity, room_name)
             session = LiveKitRoomSession(self.url, token)
             session.start()
             self.sessions[session_id] = session
+            self.last_activity[session_id] = real_time.time()
             return session
 
     def get_session(self, session_id: str) -> Optional[LiveKitRoomSession]:
         return self.sessions.get(session_id)
 
     def set_recording(self, session_id: str, enabled: bool):
+        self.touch_activity(session_id)
         session = self.get_session(session_id)
         if session:
             session.set_recording(enabled)
@@ -808,18 +827,21 @@ class LiveKitSessionManager:
             session.set_audio_callback(callback)
 
     def pop_audio_buffer(self, session_id: str) -> bytes:
+        self.touch_activity(session_id)
         session = self.get_session(session_id)
         if not session:
             return b""
         return session.pop_audio_buffer()
 
     def send_pcm(self, session_id: str, pcm_bytes: bytes, sample_rate: int = 24000, channels: int = 1):
+        self.touch_activity(session_id)
         session = self.get_session(session_id)
         if session:
             session.send_pcm(pcm_bytes, sample_rate=sample_rate, channels=channels)
 
     def close_session(self, session_id: str):
         with self.lock:
+            self.last_activity.pop(session_id, None)
             session = self.sessions.pop(session_id, None)
             if session:
                 session.close()

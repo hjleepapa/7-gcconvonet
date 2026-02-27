@@ -1276,6 +1276,14 @@ LiveKit SFU → Browser playback
                 reconnectLivekit(reason);
             });
 
+            socket.on('livekit_idle_disconnect', (data) => {
+                const msg = data?.message || 'Disconnected due to inactivity.';
+                cleanupLivekit().then(() => {
+                    setLivekitStatus('offline', 'LiveKit: idle disconnect');
+                    showStatus(msg + ' Click Connect to continue.', 'info');
+                });
+            });
+
             socket.on('pending_response_available', (data) => {
                 const pendingUserId = data?.user_id || localStorage.getItem('voice_assistant_user_id');
                 if (pendingUserId) {
