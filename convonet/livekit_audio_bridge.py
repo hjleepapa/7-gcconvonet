@@ -103,6 +103,7 @@ class LiveKitRoomSession:
         self.assistant_speaking = False # Track if assistant is talking
         self.on_speaking_change = None  # Callback(is_speaking: bool)
         self._interrupted = False  # Flag to interrupt audio playback
+        self._background_tasks = set() # Track for cleanup
 
     def start(self):
         if not LIVEKIT_AVAILABLE:
@@ -119,6 +120,14 @@ class LiveKitRoomSession:
 
     def close(self):
         self._closed = True
+        self._heartbeat_stop.set()
+        
+        # Cancel all background tasks
+        for task in self._background_tasks:
+            try: task.cancel()
+            except: pass
+        self._background_tasks.clear()
+
         try:
             if self.room and self.loop and not self.loop.is_closed():
                 fut = asyncio.run_coroutine_threadsafe(self.room.disconnect(), self.loop)
@@ -681,44 +690,56 @@ class LiveKitRoomSession:
             print(f"✅ LiveKit assistant audio track PUBLISHED (sid={getattr(publication, 'sid', 'unknown')})", flush=True)
         self.ready.set()
         
-        # Room status monitor task
         async def _monitor_room():
+            last_parts = None
             while not self._closed:
                 try:
                     # Heartbeat: send a small data packet to keep connection alive
                     if self.room.connection_state == rtc.ConnectionState.CONN_CONNECTED:
-                        await self.room.local_participant.publish_data(b"hb")
+                         await self.room.local_participant.publish_data(b"hb")
                     
                     name = getattr(self.room, "name", "unknown")
-                    parts = list(getattr(self.room, "remote_participants", {}).keys())
-                    print(f"📊 Room '{name}' monitor: participants={parts}", flush=True)
-                    for pid in parts:
-                        p = self.room.remote_participants[pid]
-                        # Check tracks
-                        t_pubs = getattr(p, "track_publications", {})
-                        if not t_pubs:
-                            t_pubs = getattr(p, "_track_publications", {})
-                        if not t_pubs and hasattr(p, "tracks"):
-                            t_pubs = getattr(p, "tracks", {})
-                        
-                        try:
-                            # Safely get keys
-                            keys = list(t_pubs.keys()) if hasattr(t_pubs, "keys") else str(len(t_pubs)) if hasattr(t_pubs, "__len__") else "unknown"
-                            print(f"  └─ Participant '{pid}' tracks: {keys}", flush=True)
-                        except:
-                            pass
+                    parts = sorted(list(getattr(self.room, "remote_participants", {}).keys()))
+                    
+                    # Only log if participants changed to reduce noise
+                    if parts != last_parts:
+                        print(f"📊 Room '{name}' monitor: participants={parts}", flush=True)
+                        for pid in parts:
+                            p = self.room.remote_participants[pid]
+                            # Check tracks
+                            t_pubs = getattr(p, "track_publications", {})
+                            if not t_pubs:
+                                t_pubs = getattr(p, "_track_publications", {})
+                            if not t_pubs and hasattr(p, "tracks"):
+                                t_pubs = getattr(p, "tracks", {})
+                            
+                            try:
+                                # Safely get keys
+                                keys = list(t_pubs.keys()) if hasattr(t_pubs, "keys") else str(len(t_pubs)) if hasattr(t_pubs, "__len__") else "unknown"
+                                print(f"  └─ Participant '{pid}' tracks: {keys}", flush=True)
+                            except:
+                                pass
+                        last_parts = parts
                 except Exception as me:
-                    print(f"⚠️ Room monitor error: {me}", flush=True)
-                await asyncio.sleep(5.0) # Use a longer sleep for the monitor
+                    if not self._closed:
+                        print(f"⚠️ Room monitor error: {me}", flush=True)
+                await asyncio.sleep(10.0)
         
-        asyncio.create_task(_monitor_room())
+        # Track monitor task
+        monitor_task = self.loop.create_task(_monitor_room())
+        self._background_tasks.add(monitor_task)
+        monitor_task.add_done_callback(self._background_tasks.discard)
 
         async def _loop_heartbeat():
-             while self.loop and self.loop.is_running():
-                  print(f"💓 Loop Heartbeat: Task is running on loop", flush=True)
-                  await asyncio.sleep(5.0)
+             while self.loop and self.loop.is_running() and not self._closed:
+                  # Reduce noise: only log heartbeat occasionally (e.g., every minute)
+                  # But keep the task loop alive/monitored
+                  # print(f"💓 Loop Heartbeat: Task is running on loop", flush=True)
+                  await asyncio.sleep(60.0)
         
-        self.loop.create_task(_loop_heartbeat())
+        hb_task = self.loop.create_task(_loop_heartbeat())
+        self._background_tasks.add(hb_task)
+        hb_task.add_done_callback(self._background_tasks.discard)
 
         # Threaded Heartbeat (safer in eventlet) - keep as double check
         def _heartbeat():

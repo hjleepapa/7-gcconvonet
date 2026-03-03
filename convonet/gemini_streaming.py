@@ -732,7 +732,13 @@ class GeminiStreamingHandler:
                 # Cleanup: Clear response stream reference to allow garbage collection
                 if response_stream is not None:
                     # Try to close/cleanup the stream if it has a close method
-                    if hasattr(response_stream, 'close'):
+                    # GenAI SDK uses 'aclose' for async streams
+                    if hasattr(response_stream, 'aclose'):
+                        try:
+                            await response_stream.aclose()
+                        except Exception as ce:
+                            print(f"⚠️ Error closing Gemini response stream (aclose): {ce}", flush=True)
+                    elif hasattr(response_stream, 'close'):
                         try:
                             if asyncio.iscoroutinefunction(response_stream.close):
                                 await response_stream.close()
@@ -741,7 +747,8 @@ class GeminiStreamingHandler:
                         except:
                             pass
                     # Clear reference
-                    self._response_stream = None
+                    if self._response_stream == response_stream:
+                        self._response_stream = None
                     response_stream = None
                     
         except Exception as e:
