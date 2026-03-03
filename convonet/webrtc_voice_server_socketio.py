@@ -2212,12 +2212,14 @@ def init_socketio(socketio_instance: SocketIO, app):
             db_todo._init_database()
             
             with db_todo.SessionLocal() as db_session:
+                print(f"🔍 Searching for user with voice_pin: {pin}")
                 user = db_session.query(UserModel).filter(
                     UserModel.voice_pin == pin,
                     UserModel.is_active == True
                 ).first()
                 
                 if user:
+                    print(f"✅ User found: {user.email} (ID: {user.id})")
                     # Check if user was recently authenticated (re-authentication scenario)
                     # We check by user_id, not session_id, because sessions are recreated on disconnect
                     was_already_authenticated = False
@@ -2438,12 +2440,13 @@ def init_socketio(socketio_instance: SocketIO, app):
                         print(f"⏭️ Skipping welcome greeting (re-authentication)")
                 else:
                     # Authentication failed
-                    print(f"❌ Authentication failed: Invalid PIN")
-                    sentry_capture_voice_event("authentication_failed", session_id, details={"reason": "invalid_pin"})
+                    print(f"❌ No user found with provided PIN: {pin}")
                     emit('authenticated', {
                         'success': False,
-                        'message': "Invalid PIN. Please try again."
+                        'message': 'Invalid PIN. Please try again.'
                     })
+                    sentry_capture_voice_event("authentication_failure", session_id, details={"reason": "invalid_pin", "pin_length": len(pin)})
+                    return
         
         except Exception as e:
             print(f"❌ Authentication error: {e}")

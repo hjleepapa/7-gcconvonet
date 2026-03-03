@@ -2443,13 +2443,12 @@ VOICE OUTPUT FORMAT (CRITICAL):
                 return transfer_marker
             return final_response
         
-        # For all providers (including Gemini), use async directly with eventlet
-        # Eventlet handles async I/O efficiently without thread conflicts when using await
-        # No need for separate threads - eventlet's greenlets handle concurrency
+        # For all providers (including Gemini), use native async directly
+        # The ASGI loop (Uvicorn) handles async I/O efficiently
         timeout_seconds = execution_timeout
         print(f"⏱️ Starting agent execution with {timeout_seconds}-second timeout (provider: {current_provider})...", flush=True)
         sys.stdout.flush()
-        print(f"🔄 Using async/await directly - eventlet will handle I/O efficiently", flush=True)
+        print(f"🔄 Using native async/await for graph execution", flush=True)
         sys.stdout.flush()
         result = await asyncio.wait_for(process_stream(), timeout=timeout_seconds)
         print(f"✅ Agent execution completed successfully", flush=True)

@@ -9,82 +9,50 @@ from typing import Optional, Dict, Set
 
 import jwt
 
-# Force real OS threads and primitives even in eventlet environment
-try:
-    import eventlet.patcher
-    real_threading = eventlet.patcher.original('threading')
-    real_time = eventlet.patcher.original('time')
-    real_selectors = eventlet.patcher.original('selectors')
-    real_select = eventlet.patcher.original('select')
-    real_socket = eventlet.patcher.original('socket')
-    # Use real locks to avoid greenlet switching issues in FFI callbacks
-    RealThreadPoolExecutor = eventlet.patcher.original('concurrent.futures').ThreadPoolExecutor
-except ImportError:
-    real_threading = threading
-    real_time = time
-    real_selectors = selectors
-    real_select = None
-    real_socket = None
-    from concurrent.futures import ThreadPoolExecutor as RealThreadPoolExecutor
+import queue
+
+# Standard threading and time for hybrid ASGI environment
+real_threading = threading
+real_time = time
+real_selectors = selectors
+real_select = None
+real_socket = None
+from concurrent.futures import ThreadPoolExecutor as RealThreadPoolExecutor
 
 LIVEKIT_AVAILABLE = False
 rtc = None
 
 try:
-    # THE "NUCLEAR" ISOLATION TRICK:
-    # Temporarily force the real OS modules into sys.modules so that 
-    # when livekit imports them, it gets the clean, non-monkeypatched versions.
-    _orig_modules = {}
-    _to_isolate = {
-        'threading': real_threading,
-        'time': real_time,
-        'selectors': real_selectors,
-    }
-    if real_select: _to_isolate['select'] = real_select
-    if real_socket: _to_isolate['socket'] = real_socket
-
-    for name, mod in _to_isolate.items():
-        _orig_modules[name] = sys.modules.get(name)
-        sys.modules[name] = mod
+    from livekit import rtc
+    # Debug: Print rtc module contents immediately
+    print(f"🔍 LiveKit RTC Module Contents: {dir(rtc)}", flush=True)
     
     try:
-        from livekit import rtc
-        # Debug: Print rtc module contents immediately
-        print(f"🔍 LiveKit RTC Module Contents: {dir(rtc)}", flush=True)
-        
-        try:
-            from livekit.rtc import RoomEvent
-        except ImportError:
-            # Fallback for older/newer versions or debugging
-            print(f"⚠️ Could not import RoomEvent from livekit.rtc. Available: {dir(rtc)}")
-            if hasattr(rtc, 'RoomEvent'):
-                RoomEvent = rtc.RoomEvent
-            else:
-                print("⚠️ Defining fallback RoomEvent class")
-                class RoomEvent:
-                    PARTICIPANT_CONNECTED = "participant_connected"
-                    PARTICIPANT_DISCONNECTED = "participant_disconnected"
-                    TRACK_PUBLISHED = "track_published"
-                    TRACK_UNPUBLISHED = "track_unpublished"
-                    TRACK_SUBSCRIBED = "track_subscribed"
-                    TRACK_UNSUBSCRIBED = "track_unsubscribed"
-        
-        # Try to print version
-        try:
-            import pkg_resources
-            version = pkg_resources.get_distribution("livekit").version
-            print(f"✅ LiveKit SDK {version} imported successfully", flush=True)
-        except Exception:
-            print(f"✅ LiveKit SDK imported (version unknown)", flush=True)
+        from livekit.rtc import RoomEvent
+    except ImportError:
+        # Fallback for older/newer versions or debugging
+        print(f"⚠️ Could not import RoomEvent from livekit.rtc. Available: {dir(rtc)}")
+        if hasattr(rtc, 'RoomEvent'):
+            RoomEvent = rtc.RoomEvent
+        else:
+            print("⚠️ Defining fallback RoomEvent class")
+            class RoomEvent:
+                PARTICIPANT_CONNECTED = "participant_connected"
+                PARTICIPANT_DISCONNECTED = "participant_disconnected"
+                TRACK_PUBLISHED = "track_published"
+                TRACK_UNPUBLISHED = "track_unpublished"
+                TRACK_SUBSCRIBED = "track_subscribed"
+                TRACK_UNSUBSCRIBED = "track_unsubscribed"
+    
+    # Try to print version
+    try:
+        import pkg_resources
+        version = pkg_resources.get_distribution("livekit").version
+        print(f"✅ LiveKit SDK {version} imported successfully", flush=True)
+    except Exception:
+        print(f"✅ LiveKit SDK imported (version unknown)", flush=True)
 
-        LIVEKIT_AVAILABLE = True
-    finally:
-        # Restore the potentially monkeypatched modules for the rest of the application
-        for name, mod in _orig_modules.items():
-            if mod is not None:
-                sys.modules[name] = mod
-            else:
-                sys.modules.pop(name, None)
+    LIVEKIT_AVAILABLE = True
                 
 except Exception as e:
     print(f"⚠️ LiveKit SDK not available: {e}")
