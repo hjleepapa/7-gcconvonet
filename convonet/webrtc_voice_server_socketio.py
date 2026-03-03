@@ -587,7 +587,20 @@ def _ensure_livekit_session(session_id: str, user_id: str):
         return None
     room_name = _livekit_room_name(session_id)
     assistant_identity = f"assistant:{session_id}"
-    return livekit_manager.ensure_session(session_id, room_name, assistant_identity)
+    
+    def on_speaking_change(is_speaking):
+        """Callback from LiveKitRoomSession when assistant starts/stops speaking"""
+        emit_socketio = socketio if socketio else (socketio_instance_global if 'socketio_instance_global' in globals() else None)
+        if emit_socketio:
+            try:
+                # Use the session_id as the room to target the specific client
+                emit_socketio.emit('assistant_speaking', {'speaking': is_speaking}, namespace='/voice', room=session_id)
+                if is_speaking:
+                    print(f"🎙️ Emitted assistant_speaking: True for {session_id}", flush=True)
+            except Exception as e:
+                print(f"⚠️ Error emitting assistant_speaking: {e}", flush=True)
+
+    return livekit_manager.ensure_session(session_id, room_name, assistant_identity, on_speaking_change=on_speaking_change)
 
 def _send_livekit_pcm(session_id: str, pcm_bytes: bytes, sample_rate: int = 48000, channels: int = 1):
     if _livekit_active() and pcm_bytes:

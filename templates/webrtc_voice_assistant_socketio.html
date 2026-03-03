@@ -637,6 +637,13 @@
                 stopAllPlayback();
             });
 
+            socket.on('assistant_speaking', (data) => {
+                console.log('🎙️ assistant_speaking received:', data);
+                if (data && typeof data.speaking !== 'undefined') {
+                    setAssistantSpeaking(data.speaking, 'socket_event');
+                }
+            });
+
             socket.on('audio_stream_complete', (data) => {
                 console.log('✅ ===== audio_stream_complete =====');
                 console.log('✅ Total chunks:', data.total_chunks);

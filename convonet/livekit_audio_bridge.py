@@ -101,9 +101,8 @@ class LiveKitRoomSession:
         self._send_lock = None # Will be initialized in start() loop
         self.local_track = None # To prevent GC
         self.assistant_speaking = False # Track if assistant is talking
+        self.on_speaking_change = None  # Callback(is_speaking: bool)
         self._interrupted = False  # Flag to interrupt audio playback
-        self.on_audio_frame = None # Callback for real-time audio streaming
-        # NO MORE RECORDING LOCK - using atomic boolean and queue
 
     def start(self):
         if not LIVEKIT_AVAILABLE:
@@ -196,7 +195,11 @@ class LiveKitRoomSession:
                 self._send_lock = asyncio.Lock()
                 
             async with self._send_lock:
-                self.assistant_speaking = True
+                if not self.assistant_speaking:
+                    self.assistant_speaking = True
+                    if self.on_speaking_change:
+                        try: self.on_speaking_change(True)
+                        except: pass
                 try:
                     # Check connection state
                     if self.room.connection_state != rtc.ConnectionState.CONN_CONNECTED:
@@ -260,7 +263,11 @@ class LiveKitRoomSession:
                 except Exception as e:
                     print(f"⚠️ LiveKit capture_frame error: {e}", flush=True)
                 finally:
-                    self.assistant_speaking = False
+                    if self.assistant_speaking:
+                        self.assistant_speaking = False
+                        if self.on_speaking_change:
+                            try: self.on_speaking_change(False)
+                            except: pass
 
         asyncio.run_coroutine_threadsafe(_send(), self.loop)
 
@@ -770,15 +777,20 @@ class LiveKitSessionManager:
                     idle.append(sid)
         return idle
 
-    def ensure_session(self, session_id: str, room_name: str, assistant_identity: str) -> Optional[LiveKitRoomSession]:
+    def ensure_session(self, session_id: str, room_name: str, assistant_identity: str, on_speaking_change: Optional[callable] = None) -> Optional[LiveKitRoomSession]:
         if not self.is_available():
             return None
         with self.lock:
             if session_id in self.sessions:
                 self.last_activity[session_id] = real_time.time()
-                return self.sessions[session_id]
+                session = self.sessions[session_id]
+                if on_speaking_change:
+                    session.on_speaking_change = on_speaking_change
+                return session
             token = generate_livekit_token(self.api_key, self.api_secret, assistant_identity, room_name)
             session = LiveKitRoomSession(self.url, token)
+            if on_speaking_change:
+                session.on_speaking_change = on_speaking_change
             session.start()
             self.sessions[session_id] = session
             self.last_activity[session_id] = real_time.time()
@@ -797,6 +809,11 @@ class LiveKitSessionManager:
         session = self.get_session(session_id)
         if session:
             session.set_audio_callback(callback)
+
+    def set_speaking_callback(self, session_id: str, callback):
+        session = self.get_session(session_id)
+        if session:
+            session.on_speaking_change = callback
 
     def pop_audio_buffer(self, session_id: str) -> bytes:
         self.touch_activity(session_id)
