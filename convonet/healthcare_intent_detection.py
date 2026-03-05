@@ -138,7 +138,12 @@ def detect_healthcare_intent(text: str) -> bool:
         "book an appointment",
         "schedule a visit",
         "book a doctor",
+        "doctor appointment",
+        "physician",
+        "medical appointment",
         "appointment with",
+        "see a doctor",
+        "visit a doctor",
         "new patient",
         "register as a patient",
         "medical intake",
@@ -241,7 +246,7 @@ def get_healthcare_sub_intent(text: str) -> Optional[str]:
             return "preventive_care"
             
     # Clinical/SuiteCRM-related
-    clinical_keywords = ["book", "schedule", "register", "intake", "symptom", "triage", "sick", "record"]
+    clinical_keywords = ["book", "schedule", "register", "intake", "symptom", "triage", "sick", "record", "doctor", "appointment", "visit"]
     for kw in clinical_keywords:
         if kw in text_lower:
             return "clinical_suitecrm"

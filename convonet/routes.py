@@ -1419,6 +1419,11 @@ async def _get_agent_graph(
                 "get_care_programs",
                 "enroll_care_program",
                 "get_preventive_care",
+                "check_patient_exists",
+                "onboard_patient",
+                "book_appointment",
+                "log_clinical_intake",
+                "save_call_summary",
                 "web_search",
             ]
             
