@@ -2221,6 +2221,7 @@ def init_socketio(socketio_instance: SocketIO, app):
             # Import here to avoid circular imports
             from convonet.mcps.local_servers import db_todo
             from convonet.models.user_models import User as UserModel
+            from convonet.models.healthcare_payer_models import HealthcareMember
             
             db_todo._init_database()
             
@@ -2249,11 +2250,24 @@ def init_socketio(socketio_instance: SocketIO, app):
                         print(f"⚠️ Error checking recent authentication: {auth_check_error}")
                         pass
                     
+                    # Check if user is a healthcare patient/member
+                    is_healthcare = False
+                    try:
+                        healthcare_member = db_session.query(HealthcareMember).filter(
+                            HealthcareMember.user_id == user.id
+                        ).first()
+                        if healthcare_member:
+                            is_healthcare = True
+                            print(f"🏥 Healthcare membership detected for user: {user.id}")
+                    except Exception as hc_error:
+                        print(f"⚠️ Error checking healthcare membership: {hc_error}")
+
                     # Authentication successful
                     auth_updates = {
                         'authenticated': 'True',
                         'user_id': str(user.id),
                         'user_name': user.first_name,
+                        'is_healthcare': 'True' if is_healthcare else 'False',
                         'authenticated_at': str(time.time())
                     }
                     
@@ -2263,7 +2277,15 @@ def init_socketio(socketio_instance: SocketIO, app):
                             if success:
                                 print(f"✅ Authentication stored in Redis: {user.email}")
                                 sentry_capture_redis_operation("update_session", session_id, True)
-                                sentry_capture_voice_event("authentication_success", session_id, str(user.id), {"user_name": user.first_name, "storage": "redis", "re_authentication": was_already_authenticated})
+                                sentry_capture_voice_event("authentication_success", session_id, str(user.id), {"user_name": user.first_name, "storage": "redis", "re_authentication": was_already_authenticated, "is_healthcare": is_healthcare})
+                                
+                                # Set sticky healthcare context in Redis if they are a patient
+                                if is_healthcare:
+                                    try:
+                                        redis_manager.redis_client.setex(f"agent_type:{user.id}", 1800, "healthcare")
+                                        print(f"🏥 Set sticky healthcare context for user {user.id}")
+                                    except Exception as context_error:
+                                        print(f"⚠️ Error setting healthcare context: {context_error}")
                                 
                                 # Check for pending responses for this user
                                 try:
@@ -3326,14 +3348,20 @@ def init_socketio(socketio_instance: SocketIO, app):
                 try:
                     print(f"🎤 Generating welcome greeting for {user_name}")
                     
-                    # Generate welcome message
-                    welcome_text = f"Welcome back, {user_name}! I'm your Convonet productivity assistant. How can I help you today?"
-                    
-                    # Use user's TTS provider preference (same as agent responses)
+                    # Generate welcome message (check if healthcare session)
                     session_data = get_session(session_id) if callable(get_session) else None
                     if not session_data and session_id in active_sessions:
                         session_data = active_sessions[session_id]
+                    
                     user_id = session_data.get('user_id') if session_data else None
+                    is_healthcare = str(session_data.get('is_healthcare', 'False')).lower() == 'true' if session_data else False
+                    
+                    if is_healthcare:
+                        welcome_text = f"Hello {user_name}. I'm your healthcare assistant. I can help you with appointments, triage, and managing your medical records. How are you feeling today?"
+                    else:
+                        welcome_text = f"Welcome back, {user_name}! I'm your Convonet productivity assistant. How can I help you today?"
+                    
+                    # Use user's TTS provider preference (same as agent responses)
                     tts_provider = _get_tts_provider_for_user(user_id)
                     audio_bytes = _synthesize_audio_linear16(
                         welcome_text,
