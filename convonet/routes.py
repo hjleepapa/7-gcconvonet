@@ -2300,7 +2300,15 @@ VOICE OUTPUT FORMAT (CRITICAL):
                         try:
                             final_state = agent_graph.get_state(config=config)
                             final_messages = final_state.values.get("messages", [])
-                            last_message = final_messages[-1] if final_messages else None
+                            # Search backwards for the last AIMessage to avoid returning a ToolMessage (JSON)
+                            last_ai_message = None
+                            for m in reversed(final_messages):
+                                from langchain_core.messages import AIMessage
+                                if isinstance(m, AIMessage) and m.content:
+                                    last_ai_message = m
+                                    break
+                            
+                            last_message = last_ai_message if last_ai_message else (final_messages[-1] if final_messages else None)
                             if last_message:
                                 content = getattr(last_message, 'content', "")
                                 # Handle case where content is a list (e.g., AIMessage with multiple content blocks)
@@ -2348,6 +2356,12 @@ VOICE OUTPUT FORMAT (CRITICAL):
             if not final_response or (isinstance(final_response, str) and final_response.strip() == ""):
                 print(f"⚠️ Final response is empty, using fallback message", flush=True)
                 sys.stdout.flush()
+                final_response = "I've completed that task for you. Is there anything else you need?"
+
+            # PREVENT DUPLICATION: If we have already streamed most of the text via delta_text,
+            # and this is a Socket.IO request (indicated by session_id), we might want to skip the final duplicate emit.
+            # However, _run_agent_async returns the string which is then typically sent via TTS or agent_response.
+            # We'll let the caller handle the final emit, but we return the sanitized final_response.
                 final_response = "I'm processing your request. Please wait a moment and try again if you don't see a response."
             
             # Extract all tool calls from final state messages
