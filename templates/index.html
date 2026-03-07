@@ -10,7 +10,8 @@
                 <h2 class="text-4xl font-bold text-gray-800 mb-4">🎤 Convonet Voice AI Productivity System</h2>
                 <p class="text-xl text-gray-600 mb-6">
                     Enterprise-grade voice AI platform with multi-LLM support (Claude, Gemini, OpenAI), LiveKit WebRTC voice,
-                    domain-specific agents (Productivity, Mortgage, Healthcare), team collaboration, and intelligent call center integration
+                    domain-specific agents (Productivity, Mortgage, Healthcare), <strong>SuiteCRM integration</strong> (contacts, cases, appointments, notes),
+                    team collaboration, and intelligent call center integration with transfer context.
                 </p>
 
                 <!-- Quick Links -->
@@ -57,6 +58,7 @@
                     <span class="bg-rose-100 text-rose-800 px-3 py-1 rounded-full text-sm font-medium">Sentry</span>
                     <span class="bg-teal-100 text-teal-800 px-3 py-1 rounded-full text-sm font-medium">FusionPBX</span>
                     <span class="bg-violet-100 text-violet-800 px-3 py-1 rounded-full text-sm font-medium">Composio</span>
+                    <span class="bg-emerald-100 text-emerald-800 px-3 py-1 rounded-full text-sm font-medium">SuiteCRM</span>
                 </div>
             </div>
 
@@ -107,8 +109,24 @@
                         <h3 class="text-lg font-semibold text-gray-800">Domain-Specific Agents</h3>
                     </div>
                     <p class="text-sm text-gray-600">
-                        Productivity (todos, calendar, reminders), Mortgage (applications, DTI, documents), Healthcare.
-                        Sticky context and intelligent AI-to-human transfer via Twilio/FusionPBX.
+                        Productivity (todos, calendar, reminders), Mortgage (applications, DTI, documents), Healthcare with
+                        <strong>SuiteCRM</strong>. Sticky context and intelligent AI-to-human transfer via Twilio/FusionPBX.
+                    </p>
+                </div>
+
+                <div class="bg-white p-6 rounded-lg shadow-md border-l-4 border-emerald-500">
+                    <div class="flex items-center mb-3">
+                        <span class="bg-emerald-100 p-2 rounded-full mr-3">
+                            <svg class="w-6 h-6 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"></path>
+                            </svg>
+                        </span>
+                        <h3 class="text-lg font-semibold text-gray-800">SuiteCRM Integration</h3>
+                    </div>
+                    <p class="text-sm text-gray-600">
+                        Healthcare agent creates and links <strong>Contacts</strong>, <strong>Cases</strong>, <strong>Meetings</strong> (appointments), and <strong>Notes</strong> in SuiteCRM.
+                        On transfer to the call center (e.g. extension 2001), agents see full context: patient ID, case ID, appointment ID, and call summary.
                     </p>
                 </div>
 
@@ -123,7 +141,7 @@
                         <h3 class="text-lg font-semibold text-gray-800">38 MCP Tools</h3>
                     </div>
                     <p class="text-sm text-gray-600">
-                        Todos, calendar, teams, reminders, mortgage tools, healthcare tools, call transfer.
+                        Todos, calendar, teams, reminders, mortgage tools, healthcare + SuiteCRM (patient lookup, book appointment, log case, save call summary), call transfer.
                         Works with Claude, Gemini, and OpenAI.
                     </p>
                 </div>
@@ -381,6 +399,14 @@
                                     d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"></path>
                             </svg>
                             Mortgage Dashboard
+                        </a>
+                        <a href="/call-center"
+                            class="inline-flex items-center px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors">
+                            <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z"></path>
+                            </svg>
+                            Call Center (SuiteCRM context)
                         </a>
                         <a href="{{ url_for('convonet_system_architecture') }}"
                             class="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
