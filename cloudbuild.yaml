@@ -1,14 +1,26 @@
 # cloudbuild.yaml
 steps:
-  # 1. Build the gateway service
+  # 1. Build services
   - name: 'gcr.io/cloud-builders/docker'
     args: ['build', '-t', 'us-central1-docker.pkg.dev/$PROJECT_ID/convonet-repo/voice-gateway-service:$COMMIT_SHA', '-f', 'docker/voice-gateway.Dockerfile', '.']
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'us-central1-docker.pkg.dev/$PROJECT_ID/convonet-repo/agent-llm-service:$COMMIT_SHA', '-f', 'docker/agent-llm.Dockerfile', '.']
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'us-central1-docker.pkg.dev/$PROJECT_ID/convonet-repo/call-center-service:$COMMIT_SHA', '-f', 'docker/call-center.Dockerfile', '.']
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'us-central1-docker.pkg.dev/$PROJECT_ID/convonet-repo/crm-integration-service:$COMMIT_SHA', '-f', 'docker/crm-integration.Dockerfile', '.']
 
-  # 2. Push the gateway service to Artifact Registry
+  # 2. Push services to Artifact Registry
   - name: 'gcr.io/cloud-builders/docker'
     args: ['push', 'us-central1-docker.pkg.dev/$PROJECT_ID/convonet-repo/voice-gateway-service:$COMMIT_SHA']
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'us-central1-docker.pkg.dev/$PROJECT_ID/convonet-repo/agent-llm-service:$COMMIT_SHA']
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'us-central1-docker.pkg.dev/$PROJECT_ID/convonet-repo/call-center-service:$COMMIT_SHA']
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'us-central1-docker.pkg.dev/$PROJECT_ID/convonet-repo/crm-integration-service:$COMMIT_SHA']
 
-  # 3. Deploy the gateway service to Cloud Run
+  # 3. Deploy services to Cloud Run
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
@@ -19,14 +31,46 @@ steps:
       - 'us-central1-docker.pkg.dev/$PROJECT_ID/convonet-repo/voice-gateway-service:$COMMIT_SHA'
       - '--region'
       - 'us-central1'
-      - '--platform'
-      - 'managed'
       - '--allow-unauthenticated'
-
-# Add similar steps for other services as they are implemented
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'agent-llm-service'
+      - '--image'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/convonet-repo/agent-llm-service:$COMMIT_SHA'
+      - '--region'
+      - 'us-central1'
+      - '--allow-unauthenticated'
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'call-center-service'
+      - '--image'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/convonet-repo/call-center-service:$COMMIT_SHA'
+      - '--region'
+      - 'us-central1'
+      - '--allow-unauthenticated'
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'crm-integration-service'
+      - '--image'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/convonet-repo/crm-integration-service:$COMMIT_SHA'
+      - '--region'
+      - 'us-central1'
+      - '--allow-unauthenticated'
 
 images:
   - 'us-central1-docker.pkg.dev/$PROJECT_ID/convonet-repo/voice-gateway-service:$COMMIT_SHA'
+  - 'us-central1-docker.pkg.dev/$PROJECT_ID/convonet-repo/agent-llm-service:$COMMIT_SHA'
+  - 'us-central1-docker.pkg.dev/$PROJECT_ID/convonet-repo/call-center-service:$COMMIT_SHA'
+  - 'us-central1-docker.pkg.dev/$PROJECT_ID/convonet-repo/crm-integration-service:$COMMIT_SHA'
 
 options:
   logging: CLOUD_LOGGING_ONLY
