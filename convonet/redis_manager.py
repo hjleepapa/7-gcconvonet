@@ -24,19 +24,23 @@ class RedisManager:
     
     def __init__(self):
         """Initialize Redis connection"""
-        # Import environment config (optional)
-        try:
-            from .environment_config import config
-            redis_host = config.REDIS_HOST
-            redis_port = config.REDIS_PORT
-            redis_password = config.REDIS_PASSWORD
-            redis_db = config.REDIS_DB
-        except ImportError:
-            # Fallback to environment variables
-            redis_host = os.getenv('REDIS_HOST', 'localhost')
-            redis_port = safe_int(os.getenv('REDIS_PORT', '6379'), 6379)
-            redis_password = os.getenv('REDIS_PASSWORD', '')
-            redis_db = safe_int(os.getenv('REDIS_DB', '0'), 0)
+        # Configuration hierarchy: Environment variables -> Environment Config -> Defaults
+        redis_host = os.getenv('REDIS_HOST')
+        redis_port = safe_int(os.getenv('REDIS_PORT', '6379'), 6379)
+        redis_password = os.getenv('REDIS_PASSWORD', '')
+        redis_db = safe_int(os.getenv('REDIS_DB', '0'), 0)
+
+        if not redis_host:
+            try:
+                from .environment_config import config
+                redis_host = config.REDIS_HOST
+                redis_port = config.REDIS_PORT
+                redis_password = config.REDIS_PASSWORD
+                redis_db = config.REDIS_DB
+            except (ImportError, AttributeError):
+                redis_host = 'localhost'
+        
+        logger.info(f"🔌 Connecting to Redis at {redis_host}:{redis_port} (db={redis_db})")
         
         try:
             self.redis_client = redis.Redis(

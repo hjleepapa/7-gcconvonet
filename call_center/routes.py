@@ -15,6 +15,31 @@ try:
 except ImportError:
     redis_manager = None
 
+
+def _call_center_before_request():
+    """Session timeout (automatic logoff) for HIPAA-oriented use."""
+    try:
+        from .security import is_session_expired, update_session_activity
+    except ImportError:
+        return
+    path = request.path or ""
+    # Allow index and login without session
+    if "/api/agent/login" in path:
+        return
+    if path.rstrip("/").endswith("/call-center") or path == "/call-center/":
+        return  # index page
+    if is_session_expired(session):
+        session.clear()
+        if "/api/" in path:
+            return jsonify({"success": False, "error": "Session expired"}), 401
+        return
+    if session.get("agent_id"):
+        update_session_activity(session)
+
+
+call_center_bp.before_request(_call_center_before_request)
+
+
 @call_center_bp.route('/')
 def index():
     """Render the call center UI"""
@@ -74,7 +99,12 @@ def agent_login():
     # Store in session
     session['agent_id'] = agent.id
     session['agent_username'] = agent.agent_id
-    
+    try:
+        from .security import update_session_activity
+        update_session_activity(session)
+    except ImportError:
+        pass
+
     return jsonify({
         'success': True,
         'agent': {
@@ -412,6 +442,21 @@ def _fetch_customer_profile(extension=None, call_sid=None, call_id=None, custome
         phone = profile.get('phone') or customer_id
         if phone and (not profile.get('suitecrm_context') or not profile.get('suitecrm_context').get('patient_id')):
             _enrich_profile_from_suitecrm(profile, phone)
+        # PHI access audit (HIPAA-oriented)
+        try:
+            from .security import audit_log_phi_access
+            aid = session.get('agent_id')
+            agent = Agent.query.get(aid) if aid else None
+            audit_log_phi_access(
+                agent_id=aid,
+                agent_username=agent.agent_id if agent else None,
+                action='customer_profile_view',
+                resource='customer_profile',
+                identifier_type='extension_or_customer',
+                identifier_value=extension or customer_id,
+            )
+        except Exception:
+            pass
         return jsonify(profile)
     
     # No cached profile - try SuiteCRM lookup by caller number (customer_id)
@@ -438,6 +483,7 @@ def _enrich_profile_from_suitecrm(profile, phone):
     """Look up SuiteCRM contact by phone and add patient_id to profile."""
     try:
         from convonet.services.suitecrm_client import SuiteCRMClient
+        from .security import audit_log_phi_access
         client = SuiteCRMClient()
         if client.authenticate():
             clean_phone = str(phone).replace('+', '').replace('-', '').replace(' ', '')
@@ -451,6 +497,17 @@ def _enrich_profile_from_suitecrm(profile, phone):
                     attrs = result.get('attributes', {})
                     if attrs and not profile.get('name') or profile.get('name') == 'Unknown Caller':
                         profile['name'] = f"{attrs.get('first_name', '')} {attrs.get('last_name', '')}".strip() or profile.get('name')
+                    # PHI access audit
+                    try:
+                        aid = session.get('agent_id')
+                        agent = Agent.query.get(aid) if aid else None
+                        audit_log_phi_access(
+                            agent_id=aid, agent_username=agent.agent_id if agent else None,
+                            action='suitecrm_lookup', resource='Contacts',
+                            identifier_type='patient_id', identifier_value=result['patient_id'],
+                        )
+                    except Exception:
+                        pass
     except Exception:
         pass  # SuiteCRM lookup is best-effort
 

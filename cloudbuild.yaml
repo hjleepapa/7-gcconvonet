@@ -32,6 +32,8 @@ steps:
       - '--region'
       - 'us-central1'
       - '--allow-unauthenticated'
+      - '--set-env-vars'
+      - 'REDIS_HOST=$$REDIS_HOST,DB_URI=$$DB_URI'
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
@@ -43,6 +45,8 @@ steps:
       - '--region'
       - 'us-central1'
       - '--allow-unauthenticated'
+      - '--set-env-vars'
+      - 'REDIS_HOST=$$REDIS_HOST,DB_URI=$$DB_URI'
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
@@ -54,6 +58,8 @@ steps:
       - '--region'
       - 'us-central1'
       - '--allow-unauthenticated'
+      - '--set-env-vars'
+      - 'REDIS_HOST=$$REDIS_HOST,DB_URI=$$DB_URI'
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
@@ -65,6 +71,8 @@ steps:
       - '--region'
       - 'us-central1'
       - '--allow-unauthenticated'
+      - '--set-env-vars'
+      - 'REDIS_HOST=$$REDIS_HOST,DB_URI=$$DB_URI'
 
 images:
   - 'us-central1-docker.pkg.dev/$PROJECT_ID/convonet-repo/voice-gateway-service:$COMMIT_SHA'

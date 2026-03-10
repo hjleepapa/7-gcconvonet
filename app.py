@@ -66,7 +66,10 @@ def create_app():
     # Configuration
     app.config['SECRET_KEY'] = os.environ.get('FLASK_KEY')
     # Centralized database configuration
-    app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get("DB_URI")
+    db_uri = os.environ.get("DB_URI")
+    # If DB_URI is not provided, but we are on GCP, we might want to construct it
+    # For now, we rely on the DB_URI being set correctly in environment variables
+    app.config['SQLALCHEMY_DATABASE_URI'] = db_uri or "sqlite:///instance/local.db"
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
     # Initialize extensions
