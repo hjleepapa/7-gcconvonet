@@ -15,8 +15,8 @@ import sentry_sdk
 try:
     import nest_asyncio
     nest_asyncio.apply()
-except ImportError:
-    pass  # nest_asyncio not available, may cause issues with eventlet
+except (ImportError, ValueError) as getattr:
+    pass  # nest_asyncio not available, or loop type not supported (e.g. uvloop)
 
 from twilio.twiml.voice_response import VoiceResponse, Connect, Gather
 from .state import AgentState
