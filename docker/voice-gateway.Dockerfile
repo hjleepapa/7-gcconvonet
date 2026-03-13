@@ -8,4 +8,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # FastAPI entrypoint
-CMD ["uvicorn", "convonet.voice_gateway_service:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["uvicorn", "convonet.voice_gateway_service:app", "--host", "0.0.0.0", "--port", "8080", "--loop", "asyncio"]
