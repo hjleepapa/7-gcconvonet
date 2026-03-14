@@ -782,7 +782,8 @@ async def get_todos() -> str:
     with SessionLocal() as session:
         todos = session.query(DBTodo).all()
         todos_list = [Todo.model_validate(todo.__dict__).model_dump_json(indent=2) for todo in todos]
-    return f"[{', \n'.join(todos_list)}]"
+    sep = ",\n"
+    return f"[{sep.join(todos_list)}]"
 
 @mcp.tool()
 async def complete_todo(id: UUID) -> str:

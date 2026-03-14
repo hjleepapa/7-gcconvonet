@@ -48,12 +48,14 @@ With this setup, **no cross-origin env vars** are needed on call-center-service:
 | Function | What it does |
 |----------|----------------|
 | `health_check()` | `GET /health` → `{"status":"ok","service":"voice-gateway"}`. |
-| `websocket_endpoint(websocket)` | `WS /webrtc/ws`: accepts connection, assigns `session_id`, loops on `receive_text()`; dispatches by `message["type"]` to authenticate, start_recording, audio_chunk, stop_recording, heartbeat. **STT/TTS/LLM not wired yet** (logging only). |
+| `websocket_endpoint(websocket)` | `WS /webrtc/ws`: accepts connection, session state; on **start_recording** clears buffer and sets recording; on **audio_chunk** appends base64-decoded bytes; on **stop_recording** runs **STT → agent-llm → TTS** pipeline (batch) and sends `transcript_final`, `agent_final`, `audio_chunk` (TTS) to client. |
+| `_run_stt_tts_pipeline_sync()` | Sync helper: Deepgram STT → HTTP `POST` to agent-llm-service → Deepgram TTS; returns (transcript, agent_text, tts_bytes). |
+| `_run_pipeline_and_send()` | Async: runs pipeline in executor, sends status/transcript_final/agent_final/audio_chunk over WebSocket. |
 
 **Message flow (current):**
 
 - **Client → Server:** JSON with `type` + payload. Parsed via `convonet.schemas`: `AuthMessage`, `StartRecordingMessage`, `AudioChunkMessage`, `StopRecordingMessage`, `HeartbeatMessage`, `TransferRequestMessage`.
-- **Server → Client:** `AuthOkMessage`, `ErrorMessage` used; other server message types (e.g. `TranscriptFinalMessage`, `AgentStreamChunkMessage`, `AudioChunkOutMessage`) are defined in `schemas.py` but **not yet sent** by the gateway (to be wired when STT/agent/TTS are integrated).
+- **Server → Client:** `AuthOkMessage`, `StatusMessage`, `TranscriptFinalMessage`, `AgentFinalMessage`, `AudioChunkOutMessage` (TTS), `ErrorMessage`. Client records mic (MediaRecorder WebM), sends one full blob as `audio_chunk` then `stop_recording`; backend runs batch STT (Deepgram) → agent (HTTP) → TTS (Deepgram) and streams results back.
 
 ### 2.2 Mapping to Legacy Code (for future wiring)
 
@@ -339,7 +341,24 @@ Then `curl http://localhost:8000/health`.
 
 ---
 
-## 10. Quick Reference: Where Things Live
+## 10. Where to find logs (Cloud Run)
+
+To debug voice assistant, agent, or call center issues:
+
+1. **Google Cloud Console** → **Cloud Run** → select the service (e.g. **voice-gateway-service**, **agent-llm-service**, **call-center-service**).
+2. Open the **Logs** tab (or **Logs** in the left menu → filter by resource type **Cloud Run Revision** and service name).
+3. Filter by severity or search for `Starting recording`, `WebSocket`, `agent/process`, etc.
+
+**CLI:** Stream logs for a service:
+```bash
+gcloud run services logs read voice-gateway-service --region=us-central1 --limit=100
+```
+
+For the **Voice Assistant** WebSocket at `/webrtc/ws`, relevant logs are in **voice-gateway-service** (e.g. "New WebSocket connection", "Starting recording for session ...", "Received audio chunk ..."). The agent-llm-service is only hit when the gateway calls `POST /agent/process`; currently the WebSocket handler does **not** call the agent (see §2.1 — STT/LLM/TTS not wired in the gateway yet).
+
+---
+
+## 11. Quick Reference: Where Things Live
 
 - **WebSocket message types and Pydantic models:** `convonet/schemas.py`
 - **Voice WebSocket handler and (future) Twilio routes:** `convonet/voice_gateway_service.py`
@@ -347,6 +366,8 @@ Then `curl http://localhost:8000/health`.
 - **Real agent logic:** `convonet/routes.py` (`_run_agent_async`, `_get_agent_graph`), `convonet/assistant_graph_todo.py`, `convonet/gemini_streaming.py`
 - **Call center:** `convonet/call_center_service.py` (UI + stub APIs); full logic in `call_center/routes.py`
 - **SuiteCRM:** `convonet/services/suitecrm_client.py`; FastAPI wrapper: `convonet/crm_integration_service.py`
-- **CI/CD:** `cloudbuild.yaml` (builds and deploys all four services to Cloud Run with `REDIS_HOST`, `DB_URI`).
+- **CI/CD:** `cloudbuild.yaml` (builds and deploys all four services). **Voice + call-center only:** `cloudbuild-voice-callcenter.yaml`.
+  - All four: `gcloud builds submit --config cloudbuild.yaml .`
+  - Voice-gateway + call-center only: `gcloud builds submit --config cloudbuild-voice-callcenter.yaml .`
 
 Using this map you can start all four services locally, hit health and stub endpoints, validate WebSocket message handling, and then incrementally replace mocks with real logic (agent, CRM, call center DB/session, and voice STT/TTS/transfer).

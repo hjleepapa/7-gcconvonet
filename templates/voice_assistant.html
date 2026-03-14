@@ -12,6 +12,8 @@
         <h1 class="text-2xl font-bold text-gray-800 mb-2">Voice Assistant</h1>
         <p class="text-sm text-gray-600 mb-6">WebRTC / FastAPI WebSocket (voice-gateway-service). No LiveKit.</p>
         <div id="status" class="mb-4 p-3 rounded-lg bg-gray-100 text-gray-700 text-sm">Connecting to <span id="wsUrl"></span>…</div>
+        <div id="transcript" class="mb-2 p-2 rounded bg-blue-50 text-sm text-gray-700 hidden"></div>
+        <div id="response" class="mb-2 p-2 rounded bg-green-50 text-sm text-gray-700 hidden"></div>
         <div id="log" class="mb-6 h-32 overflow-y-auto rounded bg-gray-50 p-2 text-xs font-mono text-gray-600"></div>
         <div class="flex gap-3 justify-center">
             <button id="btnStart" disabled class="px-6 py-3 rounded-lg bg-orange-500 text-white font-semibold disabled:opacity-50 disabled:cursor-not-allowed">Start</button>
@@ -27,6 +29,9 @@
             let ws = null;
             let sessionId = 'session-' + Math.random().toString(36).slice(2, 11);
             let sequence = 0;
+            let mediaRecorder = null;
+            let audioChunks = [];
+            let stream = null;
 
             function log(msg) {
                 const el = document.getElementById('log');
@@ -38,6 +43,13 @@
                 const el = document.getElementById('status');
                 el.textContent = text;
                 el.className = 'mb-4 p-3 rounded-lg text-sm ' + (ok ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-700');
+            }
+
+            function playAudioFromBase64(b64, mime) {
+                mime = mime || 'audio/mpeg';
+                const dataUrl = 'data:' + mime + ';base64,' + b64;
+                const audio = new Audio(dataUrl);
+                audio.play().catch(function (e) { log('Play failed: ' + e.message); });
             }
 
             function connect() {
@@ -54,10 +66,30 @@
                         const msg = JSON.parse(ev.data);
                         log('← ' + (msg.type || 'message'));
                         if (msg.type === 'auth_ok') {
-                            setStatus('Ready. Click Start to begin.', true);
+                            setStatus('Ready. Click Start, speak, then Stop.', true);
                             document.getElementById('btnStart').disabled = false;
                         }
-                        if (msg.type === 'error') log('Error: ' + (msg.message || ''));
+                        if (msg.type === 'status') {
+                            setStatus(msg.message || 'Processing…', true);
+                        }
+                        if (msg.type === 'transcript_final' && msg.text) {
+                            const el = document.getElementById('transcript');
+                            el.textContent = 'You: ' + msg.text;
+                            el.classList.remove('hidden');
+                        }
+                        if (msg.type === 'agent_final' && msg.text) {
+                            const el = document.getElementById('response');
+                            el.textContent = 'Assistant: ' + msg.text;
+                            el.classList.remove('hidden');
+                        }
+                        if (msg.type === 'audio_chunk' && msg.data_b64) {
+                            playAudioFromBase64(msg.data_b64);
+                            setStatus('Playing response…', true);
+                        }
+                        if (msg.type === 'error') {
+                            log('Error: ' + (msg.message || ''));
+                            setStatus(msg.message || 'Error', false);
+                        }
                     } catch (e) { log('← ' + ev.data.slice(0, 80)); }
                 };
                 ws.onclose = function () {
@@ -74,12 +106,61 @@
                 ws.send(JSON.stringify({ type: 'start_recording', session_id: sessionId, stt_mode: 'streaming', language: 'en-US' }));
                 log('Sent start_recording');
                 document.getElementById('btnStop').disabled = false;
+                audioChunks = [];
+                navigator.mediaDevices.getUserMedia({ audio: true }).then(function (s) {
+                    stream = s;
+                    mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
+                    mediaRecorder.ondataavailable = function (e) {
+                        if (e.data.size > 0) audioChunks.push(e.data);
+                    };
+                    mediaRecorder.start(250);
+                    setStatus('Recording… speak now.', true);
+                }).catch(function (e) {
+                    log('Mic error: ' + e.message);
+                    setStatus('Microphone access denied.', false);
+                });
             };
+
             document.getElementById('btnStop').onclick = function () {
                 if (!ws || ws.readyState !== WebSocket.OPEN) return;
-                ws.send(JSON.stringify({ type: 'stop_recording', session_id: sessionId }));
-                log('Sent stop_recording');
                 document.getElementById('btnStop').disabled = true;
+                if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                    mediaRecorder.onstop = function () {
+                        if (stream) stream.getTracks().forEach(function (t) { t.stop(); });
+                        if (audioChunks.length === 0) {
+                            ws.send(JSON.stringify({ type: 'stop_recording', session_id: sessionId }));
+                            log('No audio; sent stop_recording');
+                            return;
+                        }
+                        const blob = new Blob(audioChunks, { type: 'audio/webm' });
+                        const reader = new FileReader();
+                        reader.onloadend = function () {
+                            const buf = new Uint8Array(reader.result);
+                            let binary = '';
+                            const chunkSize = 8192;
+                            for (let i = 0; i < buf.length; i += chunkSize) {
+                                const sub = buf.subarray(i, Math.min(i + chunkSize, buf.length));
+                                binary += String.fromCharCode.apply(null, sub);
+                            }
+                            const b64 = btoa(binary);
+                            ws.send(JSON.stringify({
+                                type: 'audio_chunk',
+                                session_id: sessionId,
+                                sequence: 0,
+                                timestamp_ms: Date.now(),
+                                data_b64: b64
+                            }));
+                            ws.send(JSON.stringify({ type: 'stop_recording', session_id: sessionId }));
+                            log('Sent full recording + stop_recording');
+                            setStatus('Processing…', true);
+                        };
+                        reader.readAsArrayBuffer(blob);
+                    };
+                    mediaRecorder.stop();
+                } else {
+                    ws.send(JSON.stringify({ type: 'stop_recording', session_id: sessionId }));
+                    log('Sent stop_recording');
+                }
             };
 
             connect();

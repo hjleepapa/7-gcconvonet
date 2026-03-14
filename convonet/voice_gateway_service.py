@@ -4,18 +4,14 @@ import json
 import os
 import uuid
 import logging
-from typing import Dict, Optional
-
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
-import requests
-import time
-from typing import Optional, List, Dict, Any
+from typing import Dict, Optional, List, Any, Tuple
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request, Response, Query
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError, BaseModel
 from twilio.twiml.voice_response import VoiceResponse, Gather
+import requests
 
 from convonet.schemas import (
     ClientMessageType,
@@ -26,7 +22,10 @@ from convonet.schemas import (
     TranscriptPartialMessage,
     TranscriptFinalMessage,
     ErrorMessage,
-    ServerMessageType
+    ServerMessageType,
+    StatusMessage,
+    AgentFinalMessage,
+    AudioChunkOutMessage,
 )
 
 # Configure logging
@@ -44,14 +43,100 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Internal service URL for Agent LLM
-AGENT_LLM_URL = os.getenv("AGENT_LLM_URL", "http://agent-llm-service:8001")
+# Internal service URL for Agent LLM (Cloud Run uses 8080; set via env for your deployment)
+AGENT_LLM_URL = os.getenv("AGENT_LLM_URL", "http://localhost:8080").rstrip("/")
 
 def get_webhook_base_url():
     return os.getenv('WEBHOOK_BASE_URL', os.getenv('RENDER_EXTERNAL_URL', ''))
 
 # Active WebSocket connections: session_id -> WebSocket
 active_connections: Dict[str, WebSocket] = {}
+
+# Per-session state for WebSocket voice: recording flag and accumulated audio chunks (bytes)
+_session_state: Dict[str, Dict[str, Any]] = {}
+
+def _get_session(session_id: str) -> Dict[str, Any]:
+    if session_id not in _session_state:
+        _session_state[session_id] = {"recording": False, "chunks": [], "user_id": None, "user_name": None}
+    return _session_state[session_id]
+
+
+def _run_stt_tts_pipeline_sync(session_id: str, audio_bytes: bytes, language: str) -> Tuple[Optional[str], Optional[str], Optional[bytes]]:
+    """Run STT -> agent -> TTS synchronously (call from thread). Returns (transcript, agent_text, tts_audio_bytes)."""
+    transcript = None
+    agent_text = None
+    tts_audio = None
+    try:
+        # STT (Deepgram batch)
+        from convonet.deepgram import transcribe_audio_with_deepgram_webrtc
+        transcript = transcribe_audio_with_deepgram_webrtc(audio_bytes, language=language or "en")
+        if not transcript or not transcript.strip():
+            return (None, None, None)
+        # Agent LLM
+        agent_url = f"{AGENT_LLM_URL}/agent/process"
+        payload = {"prompt": transcript, "user_id": "voice-ws", "session_id": session_id}
+        resp = requests.post(agent_url, json=payload, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        agent_text = data.get("response") or ""
+        if not agent_text.strip():
+            return (transcript, "", None)
+        # TTS (Deepgram)
+        from convonet.deepgram import get_deepgram_service
+        svc = get_deepgram_service()
+        tts_audio = svc.synthesize_speech(agent_text, voice="aura-asteria-en")
+        return (transcript, agent_text, tts_audio)
+    except Exception as e:
+        logger.exception("Pipeline error: %s", e)
+        return (transcript, agent_text, tts_audio)
+
+
+async def _run_pipeline_and_send(
+    websocket: WebSocket,
+    session_id: str,
+    audio_bytes: bytes,
+    language: str,
+) -> None:
+    """Run STT -> agent -> TTS in executor and send results over WebSocket."""
+    loop = asyncio.get_event_loop()
+    try:
+        await websocket.send_json(
+            StatusMessage(session_id=session_id, message="Transcribing…").model_dump(mode="json")
+        )
+        transcript, agent_text, tts_audio = await loop.run_in_executor(
+            None, _run_stt_tts_pipeline_sync, session_id, audio_bytes, language
+        )
+        if not transcript or not transcript.strip():
+            await websocket.send_json(
+                ErrorMessage(session_id=session_id, message="No speech detected. Please try again.").model_dump(mode="json")
+            )
+            return
+        await websocket.send_json(
+            TranscriptFinalMessage(session_id=session_id, text=transcript).model_dump(mode="json")
+        )
+        if not agent_text or not agent_text.strip():
+            await websocket.send_json(
+                ErrorMessage(session_id=session_id, message="Agent returned no response.").model_dump(mode="json")
+            )
+            return
+        await websocket.send_json(
+            AgentFinalMessage(session_id=session_id, text=agent_text, transfer_marker=None).model_dump(mode="json")
+        )
+        if tts_audio:
+            b64 = base64.b64encode(tts_audio).decode("utf-8")
+            await websocket.send_json(
+                AudioChunkOutMessage(
+                    session_id=session_id, chunk_index=0, total_chunks=1, data_b64=b64, is_final=True
+                ).model_dump(mode="json")
+            )
+    except Exception as e:
+        logger.exception("Pipeline send error: %s", e)
+        try:
+            await websocket.send_json(
+                ErrorMessage(session_id=session_id, message=str(e)).model_dump(mode="json")
+            )
+        except Exception:
+            pass
 
 @app.get("/health")
 async def health_check():
@@ -174,49 +259,87 @@ async def websocket_endpoint(websocket: WebSocket):
             message = json.loads(data)
             
             if "type" not in message:
-                await websocket.send_json(ErrorMessage(message="Missing message type").model_dump())
+                await websocket.send_json(ErrorMessage(message="Missing message type").model_dump(mode="json"))
                 continue
-                
+            
             msg_type = message["type"]
             
             try:
                 if msg_type == ClientMessageType.AUTHENTICATE:
                     auth = AuthMessage(**message)
-                    # Logic for authentication (PIN/Token)
                     session_id = auth.session_id or session_id
                     active_connections[session_id] = websocket
-                    await websocket.send_json(AuthOkMessage(session_id=session_id).model_dump())
+                    state = _get_session(session_id)
+                    state["user_id"] = state.get("user_id") or "voice-ws"
+                    await websocket.send_json(AuthOkMessage(session_id=session_id).model_dump(mode="json"))
                     logger.info(f"Session {session_id} authenticated")
                     
                 elif msg_type == ClientMessageType.START_RECORDING:
                     start = StartRecordingMessage(**message)
-                    logger.info(f"Starting recording for session {start.session_id}")
-                    # Initialize STT resources here
+                    sid = start.session_id or session_id
+                    state = _get_session(sid)
+                    state["recording"] = True
+                    state["chunks"] = []
+                    state["language"] = (start.language or "en-US").split("-")[0] or "en"
+                    await websocket.send_json(
+                        StatusMessage(session_id=sid, message="Recording…").model_dump(mode="json")
+                    )
+                    logger.info(f"Recording started for session {sid}")
                     
                 elif msg_type == ClientMessageType.AUDIO_CHUNK:
                     chunk = AudioChunkMessage(**message)
-                    # Process audio chunk (send to STT)
-                    # For now, just logging sequence
+                    sid = chunk.session_id or session_id
+                    state = _get_session(sid)
+                    if state.get("recording"):
+                        try:
+                            data_bytes = base64.b64decode(chunk.data_b64)
+                            state["chunks"].append(data_bytes)
+                        except Exception as e:
+                            logger.warning("Invalid audio chunk b64: %s", e)
                     if chunk.sequence % 50 == 0:
-                        logger.info(f"Received audio chunk {chunk.sequence} for {chunk.session_id}")
+                        logger.debug("Audio chunk %s for %s", chunk.sequence, sid)
                         
                 elif msg_type == ClientMessageType.STOP_RECORDING:
-                    logger.info(f"Stopping recording for session {session_id}")
-                    # Finalize STT and trigger LLM
+                    stop_sid = message.get("session_id") or session_id
+                    state = _get_session(stop_sid)
+                    state["recording"] = False
+                    chunks = state.get("chunks") or []
+                    language = state.get("language") or "en"
+                    logger.info(f"Stop recording for {stop_sid}, {len(chunks)} chunks")
+                    audio_bytes = b"".join(chunks) if chunks else b""
+                    min_bytes = 2000  # ~0.1s at 16kHz mono 16-bit
+                    if len(audio_bytes) < min_bytes:
+                        await websocket.send_json(
+                            ErrorMessage(
+                                session_id=stop_sid,
+                                message="Recording too short. Speak for at least a second and try again.",
+                            ).model_dump(mode="json")
+                        )
+                    else:
+                        asyncio.create_task(
+                            _run_pipeline_and_send(websocket, stop_sid, audio_bytes, language)
+                        )
                     
                 elif msg_type == ClientMessageType.HEARTBEAT:
-                    pass # Keep-alive
+                    pass
                     
             except ValidationError as e:
-                await websocket.send_json(ErrorMessage(session_id=session_id, message=str(e)).model_dump())
+                await websocket.send_json(
+                    ErrorMessage(session_id=session_id, message=str(e)).model_dump(mode="json")
+                )
                 
     except WebSocketDisconnect:
         logger.info(f"WebSocket disconnected: {session_id}")
         if session_id in active_connections:
             del active_connections[session_id]
+        _session_state.pop(session_id, None)
     except Exception as e:
-        logger.error(f"Error in WebSocket handler: {e}")
-        await websocket.close()
+        logger.error("WebSocket error: %s", e)
+        _session_state.pop(session_id, None)
+        try:
+            await websocket.close()
+        except Exception:
+            pass
 
 if __name__ == "__main__":
     import uvicorn
