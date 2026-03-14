@@ -44,7 +44,9 @@ For production, use **Secret Manager** and `--set-secrets` so secrets don’t ap
 | `REDIS_PORT`   | All services         | `17434` |
 | `REDIS_PASSWORD` | All services       | *(secret)* |
 | `REDIS_DB`     | All services         | Numeric Redis DB index `0`–`15`. If your Redis Cloud has one logical DB, use `0`. |
-| `DB_URI`       | Agent-LLM, Call Center, etc. | `postgresql://user:pass@host/dbname` (Render connection string) |
+| `DB_URI`       | Agent-LLM, Call Center, Voice Gateway, etc. | `postgresql://user:pass@host/dbname` (Render connection string) |
+
+**Voice PIN (voice-gateway-service):** When `ENABLE_VOICE_PIN=true`, the WebSocket voice assistant requires a PIN before Start. If `DB_URI` is set, the PIN is validated against the **`users_anthropic`** table (column `voice_pin`, active users only). The authenticated user’s `id` and name are then used for the agent and mortgage tools. If `DB_URI` is not set, the env var `VOICE_PIN` is used as the only valid PIN. Set `DB_URI` on voice-gateway to use your Postgres (e.g. `jdbc:postgresql://...` → use the same URL as `postgresql://...` for SQLAlchemy).
 
 **Note:** In code, `REDIS_DB` is read as a number (default `0`). Redis Cloud usually exposes a single DB as index `0`. If you have a logical name like `database-MH3YNEOB`, that’s not a Redis DB index—use `0` for `REDIS_DB` in Cloud Run.
 

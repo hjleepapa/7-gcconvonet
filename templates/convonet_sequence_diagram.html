@@ -9,7 +9,7 @@
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div class="text-center mb-6">
                 <h1 class="text-4xl font-bold text-gray-800 mb-4">Convonet Sequence Diagram</h1>
-                <p class="text-xl text-gray-600 mb-4">Multi-LLM · LiveKit WebRTC · Domain Agents · Agent Monitor</p>
+                <p class="text-xl text-gray-600 mb-4">FastAPI · WebRTC/WebSocket · GCP Cloud Run · Domain Agents · Agent Monitor</p>
                 <div class="flex justify-center gap-4">
                     <a href="{{ url_for('convonet_tech_spec') }}" class="text-blue-600 hover:text-blue-800 underline">
                         ← Back to Tech Spec
@@ -22,14 +22,45 @@
     <!-- Main Content -->
     <section class="py-12">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <!-- Diagram Image -->
+            <!-- Text-based sequence (GCP/FastAPI) -->
             <div class="bg-white p-8 rounded-lg shadow-lg mb-8">
-                <h2 class="text-2xl font-semibold mb-6 text-gray-800 text-center">Detailed Sequence Diagram</h2>
+                <h2 class="text-2xl font-semibold mb-6 text-gray-800 text-center">Voice Flow (WebSocket → STT → Agent → TTS)</h2>
+                <div class="border-2 border-gray-200 rounded-lg p-6 bg-gray-50 font-mono text-sm overflow-x-auto">
+                    <pre class="whitespace-pre text-gray-800">Browser          voice-gateway (WS)    Deepgram    agent-llm (HTTP)    Deepgram
+   |                    |                    |              |                    |
+   |── WS /webrtc/ws ──>|                    |              |                    |
+   |                    |                    |              |                    |
+   |── authenticate(PIN)                   |              |                    |
+   |                    |── DB or env ──────>|              |                    |
+   |<── auth_ok ────────|                    |              |                    |
+   |                    |                    |              |                    |
+   |── start_recording ─>|                   |              |                    |
+   |── audio_chunk ────>|                    |              |                    |
+   |── stop_recording ─>|                    |              |                    |
+   |                    |── STT (batch) ───>|              |                    |
+   |                    |<── transcript ─────|              |                    |
+   |                    |── POST /agent/process(transcript, user_id) ──────────>|
+   |                    |                    |              | LangGraph, LLM,    |
+   |                    |                    |              | MCP tools          |
+   |                    |<── response ─────────────────────|                    |
+   |                    |── TTS ──────────────────────────────────────────────>|
+   |                    |<── audio ────────────────────────────────────────────|
+   |<── transcript_final |                    |              |                    |
+   |<── agent_final ────|                    |              |                    |
+   |<── audio_chunk ────|                    |              |                    |
+   |                    |                    |              |                    </pre>
+                </div>
+            </div>
+
+            <!-- Optional legacy diagram image -->
+            <div class="bg-white p-6 rounded-lg shadow-md mb-8">
+                <h3 class="text-xl font-semibold mb-4 text-gray-800">Reference Diagram (legacy)</h3>
                 <div class="border-2 border-gray-200 rounded-lg overflow-hidden">
                     <img src="{{ url_for('static', filename='assets/img/convonet_s_diagram.png') }}"
-                         alt="Convonet Sequence Diagram"
+                         alt="Convonet Sequence Diagram (legacy)"
                          class="w-full h-auto">
                 </div>
+                <p class="text-sm text-gray-500 mt-2">Current GCP flow is described in the steps below. Image above may reflect the legacy monolith; logic is now split across voice-gateway and agent-llm services.</p>
             </div>
 
             <!-- Phase Overview -->
@@ -38,19 +69,19 @@
                 <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                     <div class="border-l-4 border-blue-500 pl-4">
                         <h4 class="font-semibold text-gray-800 mb-1">Phase 1: Authentication</h4>
-                        <p class="text-sm text-gray-600">Steps 1-7</p>
+                        <p class="text-sm text-gray-600">WebSocket connect, PIN auth (PostgreSQL or env)</p>
                     </div>
                     <div class="border-l-4 border-green-500 pl-4">
                         <h4 class="font-semibold text-gray-800 mb-1">Phase 2: Conversation Loop</h4>
-                        <p class="text-sm text-gray-600">Steps 8-31</p>
+                        <p class="text-sm text-gray-600">Record → STT → agent-llm HTTP → TTS → playback</p>
                     </div>
                     <div class="border-l-4 border-yellow-500 pl-4">
                         <h4 class="font-semibold text-gray-800 mb-1">Phase 3: Transfer Request</h4>
-                        <p class="text-sm text-gray-600">Steps 32-38</p>
+                        <p class="text-sm text-gray-600">User requests transfer; agent-llm returns transfer_marker</p>
                     </div>
                     <div class="border-l-4 border-pink-500 pl-4">
                         <h4 class="font-semibold text-gray-800 mb-1">Phase 4: Twilio Transfer</h4>
-                        <p class="text-sm text-gray-600">Steps 39-52</p>
+                        <p class="text-sm text-gray-600">Voice-gateway → Twilio → FusionPBX → Agent Dashboard</p>
                     </div>
                 </div>
             </div>
@@ -60,17 +91,17 @@
                 <!-- Phase 1: Authentication -->
                 <div class="bg-white p-6 rounded-lg shadow-md">
                     <div class="border-l-4 border-blue-500 pl-4 mb-6">
-                        <h3 class="text-2xl font-semibold text-gray-800 mb-2">Phase 1: Authentication (Steps 1-7)</h3>
-                        <p class="text-gray-600">User authentication and session creation</p>
+                        <h3 class="text-2xl font-semibold text-gray-800 mb-2">Phase 1: Authentication</h3>
+                        <p class="text-gray-600">WebSocket connection and PIN validation (FastAPI voice-gateway-service)</p>
                     </div>
-                    
+
                     <div class="space-y-4">
                         <div class="bg-blue-50 p-4 rounded border-l-4 border-blue-500">
                             <div class="flex items-start">
                                 <span class="bg-blue-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">1</span>
                                 <div>
-                                    <h4 class="font-semibold text-gray-800 mb-1">User Browser → WebSocket Server: Connect WebSocket</h4>
-                                    <p class="text-sm text-gray-700">User opens the Convonet LiveKit WebRTC voice assistant UI and establishes a WebSocket connection via Socket.IO (or LiveKit) to the Flask server.</p>
+                                    <h4 class="font-semibold text-gray-800 mb-1">User Browser → Voice Gateway: Connect WebSocket</h4>
+                                    <p class="text-sm text-gray-700">User opens the voice assistant UI at <code class="bg-gray-100 px-1 rounded">/voice_assistant</code> and establishes a WebSocket connection to <code class="bg-gray-100 px-1 rounded">wss://v2.convonetai.com/webrtc/ws</code> (FastAPI voice-gateway-service). No LiveKit on GCP.</p>
                                 </div>
                             </div>
                         </div>
@@ -79,8 +110,8 @@
                             <div class="flex items-start">
                                 <span class="bg-blue-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">2</span>
                                 <div>
-                                    <h4 class="font-semibold text-gray-800 mb-1">WebSocket Server → PIN Auth: Request Authentication</h4>
-                                    <p class="text-sm text-gray-700">The WebSocket server requests PIN authentication from the authentication module.</p>
+                                    <h4 class="font-semibold text-gray-800 mb-1">User Browser → Voice Gateway: authenticate (PIN)</h4>
+                                    <p class="text-sm text-gray-700">Client sends a message with <code class="bg-gray-100 px-1 rounded">type: "authenticate"</code> and PIN. Voice gateway requires this when <code class="bg-gray-100 px-1 rounded">ENABLE_VOICE_PIN</code> is true.</p>
                                 </div>
                             </div>
                         </div>
@@ -89,8 +120,8 @@
                             <div class="flex items-start">
                                 <span class="bg-blue-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">3</span>
                                 <div>
-                                    <h4 class="font-semibold text-gray-800 mb-1">PIN Auth → PostgreSQL: Validate PIN</h4>
-                                    <p class="text-sm text-gray-700">PIN authentication module validates the user's PIN against PostgreSQL database using SQLAlchemy. <strong>Note:</strong> Authentication is handled via PostgreSQL, not FusionPBX.</p>
+                                    <h4 class="font-semibold text-gray-800 mb-1">Voice Gateway → PostgreSQL (or env): Validate PIN</h4>
+                                    <p class="text-sm text-gray-700">Voice gateway validates the PIN against the <code class="bg-gray-100 px-1 rounded">users_anthropic</code> table (via <code class="bg-gray-100 px-1 rounded">DB_URI</code>) using <code class="bg-gray-100 px-1 rounded">voice_pin</code>. If <code class="bg-gray-100 px-1 rounded">DB_URI</code> is not set, it falls back to <code class="bg-gray-100 px-1 rounded">VOICE_PIN</code> environment variable.</p>
                                 </div>
                             </div>
                         </div>
@@ -99,8 +130,8 @@
                             <div class="flex items-start">
                                 <span class="bg-blue-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">4</span>
                                 <div>
-                                    <h4 class="font-semibold text-gray-800 mb-1">PostgreSQL → PIN Auth: User Data</h4>
-                                    <p class="text-sm text-gray-700">PostgreSQL returns user data including user ID, name, and team associations.</p>
+                                    <h4 class="font-semibold text-gray-800 mb-1">Voice Gateway: Store session (in-memory)</h4>
+                                    <p class="text-sm text-gray-700">On success, voice gateway stores <code class="bg-gray-100 px-1 rounded">user_id</code>, <code class="bg-gray-100 px-1 rounded">user_name</code>, and <code class="bg-gray-100 px-1 rounded">authenticated</code> in per-connection session state (no Redis required for this step).</p>
                                 </div>
                             </div>
                         </div>
@@ -109,48 +140,48 @@
                             <div class="flex items-start">
                                 <span class="bg-blue-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">5</span>
                                 <div>
-                                    <h4 class="font-semibold text-gray-800 mb-1">PIN Auth → Redis: Create Session</h4>
-                                    <p class="text-sm text-gray-700">A new session is created in Redis with a unique session ID, storing user context and authentication status.</p>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="bg-blue-50 p-4 rounded border-l-4 border-blue-500">
-                            <div class="flex items-start">
-                                <span class="bg-blue-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">6</span>
-                                <div>
-                                    <h4 class="font-semibold text-gray-800 mb-1">PIN Auth → WebSocket Server: Authenticated</h4>
-                                    <p class="text-sm text-gray-700">Authentication module confirms successful authentication to the WebSocket server.</p>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="bg-blue-50 p-4 rounded border-l-4 border-blue-500">
-                            <div class="flex items-start">
-                                <span class="bg-blue-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">7</span>
-                                <div>
-                                    <h4 class="font-semibold text-gray-800 mb-1">WebSocket Server → User Browser: Session ID</h4>
-                                    <p class="text-sm text-gray-700">WebSocket server sends the session ID to the user browser. The user is now authenticated and ready to interact with the voice assistant.</p>
+                                    <h4 class="font-semibold text-gray-800 mb-1">Voice Gateway → User Browser: auth_ok</h4>
+                                    <p class="text-sm text-gray-700">Voice gateway sends <code class="bg-gray-100 px-1 rounded">auth_ok</code> with user details. The client hides the PIN form and shows the Start/Stop recording controls.</p>
                                 </div>
                             </div>
                         </div>
                     </div>
                 </div>
 
-                <!-- Phase 2: Normal Conversation Loop -->
+                <!-- Phase 2: Conversation Loop -->
                 <div class="bg-white p-6 rounded-lg shadow-md">
                     <div class="border-l-4 border-green-500 pl-4 mb-6">
-                        <h3 class="text-2xl font-semibold text-gray-800 mb-2">Phase 2: Normal Conversation Loop (Steps 8-31)</h3>
-                        <p class="text-gray-600">Audio capture, transcription, AI processing, and response generation</p>
+                        <h3 class="text-2xl font-semibold text-gray-800 mb-2">Phase 2: Conversation Loop (STT → Agent → TTS)</h3>
+                        <p class="text-gray-600">Audio capture in browser, batch STT and agent call in voice-gateway, TTS and playback</p>
                     </div>
-                    
+
                     <div class="space-y-4">
+                        <div class="bg-green-50 p-4 rounded border-l-4 border-green-500">
+                            <div class="flex items-start">
+                                <span class="bg-green-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">6</span>
+                                <div>
+                                    <h4 class="font-semibold text-gray-800 mb-1">User Browser → Voice Gateway: start_recording</h4>
+                                    <p class="text-sm text-gray-700">User clicks Start. Browser uses <code class="bg-gray-100 px-1 rounded">getUserMedia</code> and <code class="bg-gray-100 px-1 rounded">MediaRecorder</code> to capture microphone audio. Client sends <code class="bg-gray-100 px-1 rounded">start_recording</code> over the WebSocket. Voice gateway sets recording state and clears the in-memory audio buffer for this session.</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="bg-green-50 p-4 rounded border-l-4 border-green-500">
+                            <div class="flex items-start">
+                                <span class="bg-green-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">7</span>
+                                <div>
+                                    <h4 class="font-semibold text-gray-800 mb-1">User Browser → Voice Gateway: audio_chunk (base64)</h4>
+                                    <p class="text-sm text-gray-700">While recording, the browser sends one or more <code class="bg-gray-100 px-1 rounded">audio_chunk</code> messages (base64-encoded WebM audio). Voice gateway appends decoded bytes to the session buffer.</p>
+                                </div>
+                            </div>
+                        </div>
+
                         <div class="bg-green-50 p-4 rounded border-l-4 border-green-500">
                             <div class="flex items-start">
                                 <span class="bg-green-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">8</span>
                                 <div>
-                                    <h4 class="font-semibold text-gray-800 mb-1">User Browser → WebSocket Server: Start Recording</h4>
-                                    <p class="text-sm text-gray-700">User initiates voice recording in the browser (LiveKit or MediaRecorder), beginning the audio capture process.</p>
+                                    <h4 class="font-semibold text-gray-800 mb-1">User Browser → Voice Gateway: stop_recording</h4>
+                                    <p class="text-sm text-gray-700">User clicks Stop. Client sends <code class="bg-gray-100 px-1 rounded">stop_recording</code>. Voice gateway runs the pipeline in a background task: STT → agent-llm HTTP → TTS, then sends results back over the WebSocket.</p>
                                 </div>
                             </div>
                         </div>
@@ -159,8 +190,8 @@
                             <div class="flex items-start">
                                 <span class="bg-green-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">9</span>
                                 <div>
-                                    <h4 class="font-semibold text-gray-800 mb-1">WebSocket Server → LiveKit WebRTC Voice Server: Audio Chunks</h4>
-                                    <p class="text-sm text-gray-700">Audio chunks are streamed from the browser via LiveKit WebRTC (or Socket.IO) to the LiveKit WebRTC Voice Server (<code class="bg-gray-100 px-1 rounded">webrtc_voice_server_socketio.py</code>).</p>
+                                    <h4 class="font-semibold text-gray-800 mb-1">Voice Gateway → Deepgram: Batch STT</h4>
+                                    <p class="text-sm text-gray-700">Voice gateway sends the concatenated audio to Deepgram for batch transcription (e.g. <code class="bg-gray-100 px-1 rounded">transcribe_audio_with_deepgram_webrtc</code>). Deepgram returns the transcript text.</p>
                                 </div>
                             </div>
                         </div>
@@ -169,71 +200,34 @@
                             <div class="flex items-start">
                                 <span class="bg-green-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">10</span>
                                 <div>
-                                    <h4 class="font-semibold text-gray-800 mb-1">LiveKit WebRTC Voice Server → Redis: Buffer Audio Data</h4>
-                                    <p class="text-sm text-gray-700">Each session's audio chunks are appended to a Redis buffer (convonet.redis_manager) so downstream workers can read them for processing.</p>
+                                    <h4 class="font-semibold text-gray-800 mb-1">Voice Gateway → Agent LLM Service: POST /agent/process</h4>
+                                    <p class="text-sm text-gray-700">Voice gateway sends an HTTP <code class="bg-gray-100 px-1 rounded">POST</code> to <code class="bg-gray-100 px-1 rounded">AGENT_LLM_URL/agent/process</code> with transcript, <code class="bg-gray-100 px-1 rounded">user_id</code>, <code class="bg-gray-100 px-1 rounded">session_id</code>. Agent-llm-service runs LangGraph, selects domain agent (Todo/Mortgage/Healthcare) by intent, calls Multi-LLM and MCP tools, and returns the response text (and optional <code class="bg-gray-100 px-1 rounded">transfer_marker</code>).</p>
                                 </div>
                             </div>
                         </div>
 
                         <div class="bg-green-50 p-4 rounded border-l-4 border-green-500">
                             <div class="flex items-start">
-                                <span class="bg-green-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">11-12</span>
+                                <span class="bg-green-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">11</span>
                                 <div>
-                                    <h4 class="font-semibold text-gray-800 mb-1">Redis → Deepgram STT: Send Audio Buffer → Transcribed Text</h4>
-                                    <p class="text-sm text-gray-700">The voice server reads the buffer and forwards it to streaming Deepgram STT for transcription. Deepgram returns the recognized text back to the voice service.</p>
-                                    <p class="text-xs text-gray-500 mt-1"><strong>Important:</strong> Deepgram STT is used for voice audio, not Twilio transcription.</p>
+                                    <h4 class="font-semibold text-gray-800 mb-1">Voice Gateway → Deepgram: TTS</h4>
+                                    <p class="text-sm text-gray-700">Voice gateway synthesizes the agent response text with Deepgram TTS and receives audio bytes.</p>
                                 </div>
                             </div>
                         </div>
 
                         <div class="bg-green-50 p-4 rounded border-l-4 border-green-500">
                             <div class="flex items-start">
-                                <span class="bg-green-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">13-15</span>
+                                <span class="bg-green-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">12</span>
                                 <div>
-                                    <h4 class="font-semibold text-gray-800 mb-1">LiveKit WebRTC Voice Server → LangGraph → Multi-LLM: Process Intent</h4>
-                                    <p class="text-sm text-gray-700">The transcript enters the LangGraph assistant. LangGraph calls the selected LLM (Claude, Gemini, or OpenAI) for reasoning and response generation. Domain agents (Productivity, Mortgage, Healthcare) may be invoked. Agent Monitor tracks the interaction. LLM returns response and tool calls to LangGraph.</p>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="bg-green-50 p-4 rounded border-l-4 border-green-500">
-                            <div class="flex items-start">
-                                <span class="bg-green-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">16-21</span>
-                                <div>
-                                    <h4 class="font-semibold text-gray-800 mb-1">Tool Execution (If Needed)</h4>
-                                    <p class="text-sm text-gray-700">If the LLM decides to execute an action, LangGraph invokes registered MCP tools. Agent Monitor records each tool call with elapsed time.</p>
-                                    <ul class="text-sm text-gray-700 list-disc list-inside mt-1 space-y-1">
-                                        <li><strong>Database Operations:</strong> PostgreSQL queries/updates via SQLAlchemy</li>
-                                        <li><strong>Calendar Operations:</strong> Google Calendar/OAuth workflows</li>
-                                        <li><strong>PBX Metadata:</strong> FusionPBX lookups for call metadata</li>
-                                    </ul>
-                                    <p class="text-sm text-gray-700 mt-2">Tool results are injected back into the LangGraph state, and the LLM composes the final reply.</p>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="bg-green-50 p-4 rounded border-l-4 border-green-500">
-                            <div class="flex items-start">
-                                <span class="bg-green-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">22-24</span>
-                                <div>
-                                    <h4 class="font-semibold text-gray-800 mb-1">LangGraph → Multi-LLM → LangGraph: Generate Final Response</h4>
-                                    <p class="text-sm text-gray-700">LangGraph sends context to the selected LLM (Claude, Gemini, or OpenAI) for final response generation. LLM returns response text to LangGraph, which passes it to the LiveKit WebRTC Voice Server.</p>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="bg-green-50 p-4 rounded border-l-4 border-green-500">
-                            <div class="flex items-start">
-                                <span class="bg-green-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">25-31</span>
-                                <div>
-                                    <h4 class="font-semibold text-gray-800 mb-1">Streaming TTS → Redis → WebSocket → User: Audio Response</h4>
-                                    <p class="text-sm text-gray-700">Final text is synthesized via streaming TTS (Deepgram, ElevenLabs, or Cartesia). The audio response is streamed back over Socket.IO/LiveKit to the browser for playback. Audio may be buffered in Redis for smooth playback.</p>
+                                    <h4 class="font-semibold text-gray-800 mb-1">Voice Gateway → User Browser: transcript_final, agent_final, audio_chunk</h4>
+                                    <p class="text-sm text-gray-700">Voice gateway sends <code class="bg-gray-100 px-1 rounded">transcript_final</code> (STT text), <code class="bg-gray-100 px-1 rounded">agent_final</code> (LLM response text), and <code class="bg-gray-100 px-1 rounded">audio_chunk</code> (base64 TTS audio). The browser displays transcript and agent text and plays the TTS audio.</p>
                                 </div>
                             </div>
                         </div>
 
                         <div class="bg-gray-100 p-3 rounded text-sm text-gray-600 italic">
-                            <strong>Loop:</strong> Steps 8-31 repeat for each user utterance, creating a continuous conversation loop until the user requests transfer or ends the session.
+                            <strong>Loop:</strong> Steps 6–12 repeat for each utterance. Tool execution (e.g. todos, mortgage, healthcare) happens inside agent-llm-service; voice-gateway only forwards the transcript and streams back the final response and TTS.
                         </div>
                     </div>
                 </div>
@@ -241,57 +235,27 @@
                 <!-- Phase 3: Transfer Request -->
                 <div class="bg-white p-6 rounded-lg shadow-md">
                     <div class="border-l-4 border-yellow-500 pl-4 mb-6">
-                        <h3 class="text-2xl font-semibold text-gray-800 mb-2">Phase 3: Transfer Request (Steps 32-38)</h3>
-                        <p class="text-gray-600">User requests transfer and system initiates transfer process</p>
+                        <h3 class="text-2xl font-semibold text-gray-800 mb-2">Phase 3: Transfer Request</h3>
+                        <p class="text-gray-600">User requests transfer to a human agent; agent-llm returns transfer_marker</p>
                     </div>
-                    
+
                     <div class="space-y-4">
                         <div class="bg-yellow-50 p-4 rounded border-l-4 border-yellow-500">
                             <div class="flex items-start">
-                                <span class="bg-yellow-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">30</span>
+                                <span class="bg-yellow-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">13</span>
                                 <div>
-                                    <h4 class="font-semibold text-gray-800 mb-1">User Browser → WebSocket Server: "Transfer to Agent"</h4>
-                                    <p class="text-sm text-gray-700">User says "I need a human" or requests transfer to a human agent.</p>
+                                    <h4 class="font-semibold text-gray-800 mb-1">User says “transfer to agent” (in voice)</h4>
+                                    <p class="text-sm text-gray-700">The utterance is captured and sent through the same pipeline (STT → agent-llm). LangGraph detects transfer intent and the LLM returns a response with <code class="bg-gray-100 px-1 rounded">transfer_marker</code>.</p>
                                 </div>
                             </div>
                         </div>
 
                         <div class="bg-yellow-50 p-4 rounded border-l-4 border-yellow-500">
                             <div class="flex items-start">
-                                <span class="bg-yellow-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">31-32</span>
+                                <span class="bg-yellow-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">14</span>
                                 <div>
-                                    <h4 class="font-semibold text-gray-800 mb-1">WebSocket Server → LiveKit WebRTC Voice Server → LangGraph: Transfer Intent</h4>
-                                    <p class="text-sm text-gray-700">Transfer intent is passed through the LiveKit WebRTC Voice Server to LangGraph for detection and processing.</p>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="bg-yellow-50 p-4 rounded border-l-4 border-yellow-500">
-                            <div class="flex items-start">
-                                <span class="bg-yellow-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">33-34</span>
-                                <div>
-                                    <h4 class="font-semibold text-gray-800 mb-1">LangGraph → Multi-LLM: Detect Transfer Intent → Transfer Command</h4>
-                                    <p class="text-sm text-gray-700">LangGraph detects transfer intent and confirms with the selected LLM. LLM returns a transfer command to LangGraph.</p>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="bg-yellow-50 p-4 rounded border-l-4 border-yellow-500">
-                            <div class="flex items-start">
-                                <span class="bg-yellow-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">35</span>
-                                <div>
-                                    <h4 class="font-semibold text-gray-800 mb-1">LangGraph → Redis: Set Transfer Flag</h4>
-                                    <p class="text-sm text-gray-700">LangGraph sets a transfer flag in Redis to indicate that a transfer is in progress.</p>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="bg-yellow-50 p-4 rounded border-l-4 border-yellow-500">
-                            <div class="flex items-start">
-                                <span class="bg-yellow-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">36-38</span>
-                                <div>
-                                    <h4 class="font-semibold text-gray-800 mb-1">LangGraph → LiveKit WebRTC Voice Server → WebSocket Server → User: Transfer Initiated</h4>
-                                    <p class="text-sm text-gray-700">Transfer initiated signal flows back through the system. LiveKit WebRTC Voice Server sends transfer event to WebSocket Server, which notifies the user browser. User sees transfer status update.</p>
+                                    <h4 class="font-semibold text-gray-800 mb-1">Agent LLM → Voice Gateway: response + transfer_marker</h4>
+                                    <p class="text-sm text-gray-700">Agent-llm-service returns the reply and <code class="bg-gray-100 px-1 rounded">transfer_marker</code>. Voice gateway can then trigger the Twilio transfer flow (Phase 4).</p>
                                 </div>
                             </div>
                         </div>
@@ -301,80 +265,59 @@
                 <!-- Phase 4: Twilio Transfer Flow -->
                 <div class="bg-white p-6 rounded-lg shadow-md">
                     <div class="border-l-4 border-pink-500 pl-4 mb-6">
-                        <h3 class="text-2xl font-semibold text-gray-800 mb-2">Phase 4: Twilio Transfer Flow (Steps 39-52)</h3>
-                        <p class="text-gray-600">Call bridging to FusionPBX and agent dashboard connection</p>
+                        <h3 class="text-2xl font-semibold text-gray-800 mb-2">Phase 4: Twilio Transfer Flow</h3>
+                        <p class="text-gray-600">Voice-gateway calls Twilio to bridge the call to FusionPBX; agent dashboard (JsSIP) receives the call</p>
                     </div>
-                    
+
                     <div class="space-y-4">
                         <div class="bg-pink-50 p-4 rounded border-l-4 border-pink-500">
                             <div class="flex items-start">
-                                <span class="bg-pink-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">39</span>
+                                <span class="bg-pink-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">15</span>
                                 <div>
-                                    <h4 class="font-semibold text-gray-800 mb-1">LiveKit WebRTC Voice Server → Twilio API: POST /voice_assistant/transfer_bridge</h4>
-                                    <p class="text-sm text-gray-700">The voice backend calls the Convonet /twilio/voice_assistant/transfer_bridge endpoint. Twilio uses the provided SIP URI: <code class="bg-gray-100 px-1 rounded">sip:2001@FREEPBX_DOMAIN;transport=udp</code> or trunk number, depending on .env configuration.</p>
+                                    <h4 class="font-semibold text-gray-800 mb-1">Voice Gateway → Twilio API: transfer_bridge</h4>
+                                    <p class="text-sm text-gray-700">Voice gateway (or Twilio webhook flow) calls the transfer-bridge endpoint so Twilio places a SIP call to FusionPBX (e.g. <code class="bg-gray-100 px-1 rounded">sip:2001@FREEPBX_DOMAIN;transport=udp</code>).</p>
                                 </div>
                             </div>
                         </div>
 
                         <div class="bg-pink-50 p-4 rounded border-l-4 border-pink-500">
                             <div class="flex items-start">
-                                <span class="bg-pink-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">40</span>
+                                <span class="bg-pink-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">16</span>
                                 <div>
-                                    <h4 class="font-semibold text-gray-800 mb-1">Twilio → FusionPBX: SIP INVITE to Extension 2001</h4>
-                                    <p class="text-sm text-gray-700">Twilio dials FusionPBX (running on Google Cloud) via SIP INVITE. FusionPBX routes the call to the target agent extension (e.g., 2001).</p>
+                                    <h4 class="font-semibold text-gray-800 mb-1">Twilio → FusionPBX: SIP INVITE (e.g. extension 2001)</h4>
+                                    <p class="text-sm text-gray-700">Twilio sends SIP INVITE to FusionPBX. FusionPBX rings the target extension (e.g. 2001).</p>
                                 </div>
                             </div>
                         </div>
 
                         <div class="bg-pink-50 p-4 rounded border-l-4 border-pink-500">
                             <div class="flex items-start">
-                                <span class="bg-pink-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">41</span>
+                                <span class="bg-pink-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">17</span>
                                 <div>
-                                    <h4 class="font-semibold text-gray-800 mb-1">FusionPBX → Agent Dashboard: Ring Extension 2001</h4>
-                                    <p class="text-sm text-gray-700">FusionPBX rings extension 2001. The agent dashboard (JsSIP client) registers with FusionPBX over WSS (wss://&lt;fusionpbx&gt;:7443) and receives the incoming call notification.</p>
+                                    <h4 class="font-semibold text-gray-800 mb-1">FusionPBX → Agent Dashboard (JsSIP): Incoming call</h4>
+                                    <p class="text-sm text-gray-700">The agent dashboard at <code class="bg-gray-100 px-1 rounded">/call-center</code> uses a JsSIP client registered with FusionPBX over WSS. It receives the incoming call and can show user info (e.g. from PostgreSQL) and answer/hangup controls.</p>
                                 </div>
                             </div>
                         </div>
 
                         <div class="bg-pink-50 p-4 rounded border-l-4 border-pink-500">
                             <div class="flex items-start">
-                                <span class="bg-pink-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">42-44</span>
+                                <span class="bg-pink-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">18</span>
                                 <div>
-                                    <h4 class="font-semibold text-gray-800 mb-1">Agent Dashboard → PostgreSQL: Fetch User Info → Show User Info Popup</h4>
-                                    <p class="text-sm text-gray-700">Agent dashboard fetches caller record from PostgreSQL via REST API. Dashboard pops the caller record and shows ringing controls with user information (name, context, call history).</p>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="bg-pink-50 p-4 rounded border-l-4 border-pink-500">
-                            <div class="flex items-start">
-                                <span class="bg-pink-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">45-48</span>
-                                <div>
-                                    <h4 class="font-semibold text-gray-800 mb-1">Agent Answers → Conversation Begins</h4>
-                                    <p class="text-sm text-gray-700">Agent answers the call via JsSIP client. FusionPBX notifies Twilio that the call is connected. Twilio bridges the audio between user leg and agent leg. Live conversation begins between the user and agent.</p>
-                                    <p class="text-xs text-gray-500 mt-2"><strong>Note:</strong> Once Twilio bridges the call to FusionPBX, the audio is now a PSTN/SIP leg (not the original WebRTC stream). Deepgram STT may still be used on the server side for context logging if needed.</p>
+                                    <h4 class="font-semibold text-gray-800 mb-1">Agent answers → Twilio bridges audio</h4>
+                                    <p class="text-sm text-gray-700">When the agent answers, Twilio bridges the user leg and the SIP leg. Live conversation continues between the user and the human agent.</p>
                                 </div>
                             </div>
                         </div>
 
                         <div class="bg-red-50 p-4 rounded border-l-4 border-red-500">
                             <div class="flex items-start">
-                                <span class="bg-red-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">49-52</span>
+                                <span class="bg-red-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-4 flex-shrink-0">—</span>
                                 <div>
-                                    <h4 class="font-semibold text-gray-800 mb-1">Alternative: Agent Rejects/Timeout</h4>
-                                    <p class="text-sm text-gray-700">If the agent rejects the call or it times out:</p>
-                                    <ul class="text-sm text-gray-700 list-disc list-inside mt-1 space-y-1">
-                                        <li>FusionPBX notifies Twilio that the call failed</li>
-                                        <li>Twilio sends transfer failed notification to LiveKit WebRTC Voice Server</li>
-                                        <li>LiveKit WebRTC Voice Server sends transfer error event to WebSocket Server</li>
-                                        <li>User browser displays transfer failed message</li>
-                                    </ul>
+                                    <h4 class="font-semibold text-gray-800 mb-1">Alternative: Reject / Timeout</h4>
+                                    <p class="text-sm text-gray-700">If the agent rejects or the call times out, FusionPBX/Twilio report failure. Voice gateway can send a transfer-failed message to the browser so the user sees an error state.</p>
                                 </div>
                             </div>
-                        </div>
-
-                        <div class="bg-gray-100 p-3 rounded text-sm text-gray-600 italic">
-                            <strong>Transfer Callback:</strong> Convonet logs the transfer outcome via the /transfer_callback webhook for monitoring and Sentry alerts.
                         </div>
                     </div>
                 </div>
@@ -385,24 +328,20 @@
                 <h3 class="text-xl font-semibold mb-4 text-gray-800">Key Sequence Points</h3>
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div class="bg-white p-4 rounded">
-                        <h4 class="font-semibold text-gray-800 mb-2">Authentication Path</h4>
-                        <p class="text-sm text-gray-700">PIN authentication uses PostgreSQL (not FusionPBX). Sessions are stored in Redis for fast access.</p>
+                        <h4 class="font-semibold text-gray-800 mb-2">Authentication</h4>
+                        <p class="text-sm text-gray-700">PIN is validated by voice-gateway against PostgreSQL <code class="bg-gray-100 px-1 rounded">users_anthropic.voice_pin</code> (when <code class="bg-gray-100 px-1 rounded">DB_URI</code> is set) or <code class="bg-gray-100 px-1 rounded">VOICE_PIN</code> env. Session state is in-memory per WebSocket.</p>
                     </div>
                     <div class="bg-white p-4 rounded">
-                        <h4 class="font-semibold text-gray-800 mb-2">Audio Processing</h4>
-                        <p class="text-sm text-gray-700">Streaming Deepgram STT for voice transcription. TTS via Deepgram, ElevenLabs, or Cartesia. Redis buffers audio chunks when needed.</p>
+                        <h4 class="font-semibold text-gray-800 mb-2">Voice Pipeline</h4>
+                        <p class="text-sm text-gray-700">Browser sends audio over WebSocket. Voice-gateway runs batch STT (Deepgram) → HTTP POST to agent-llm-service → TTS (Deepgram), then sends transcript_final, agent_final, and audio_chunk back. No LiveKit on GCP.</p>
                     </div>
                     <div class="bg-white p-4 rounded">
-                        <h4 class="font-semibold text-gray-800 mb-2">AI Orchestration</h4>
-                        <p class="text-sm text-gray-700">LangGraph coordinates between Multi-LLM (Claude, Gemini, OpenAI), domain agents, and MCP tools. Agent Monitor tracks tool calls and voice timing.</p>
+                        <h4 class="font-semibold text-gray-800 mb-2">AI &amp; Tools</h4>
+                        <p class="text-sm text-gray-700">Agent-llm-service runs LangGraph, multi-LLM (Claude, Gemini, OpenAI), and MCP tools (todo, mortgage, healthcare). Intent routing selects the domain agent. Agent Monitor UI is served by call-center-service at /agent-monitor.</p>
                     </div>
                     <div class="bg-white p-4 rounded">
-                        <h4 class="font-semibold text-gray-800 mb-2">Transfer Mechanism</h4>
-                        <p class="text-sm text-gray-700">Twilio bridges the LiveKit WebRTC user leg to the SIP agent leg. Audio transitions from WebRTC to PSTN/SIP stream.</p>
-                    </div>
-                    <div class="bg-white p-4 rounded">
-                        <h4 class="font-semibold text-gray-800 mb-2">Agent Monitor</h4>
-                        <p class="text-sm text-gray-700">Real-time observability at /agent-monitor/. Tracks tool calls with elapsed time and voice timing (buffer capture, STT, agent start, first sentence, first audio).</p>
+                        <h4 class="font-semibold text-gray-800 mb-2">Transfer</h4>
+                        <p class="text-sm text-gray-700">When the user requests transfer, agent-llm returns transfer_marker. Voice-gateway triggers Twilio to bridge to FusionPBX; the agent dashboard (JsSIP at /call-center) receives the call.</p>
                     </div>
                 </div>
             </div>
@@ -410,4 +349,3 @@
     </section>
 </div>
 {% endblock %}
-

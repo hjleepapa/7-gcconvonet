@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from typing import List, Optional, Dict, Any
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5, NAMESPACE_DNS
 from datetime import datetime, timezone
 import os
 import sys
@@ -42,6 +42,16 @@ MortgageDebt = None
 ApplicationStatus = None
 DocumentType = None
 DocumentStatus = None
+
+def _user_id_to_uuid(user_id: str) -> UUID:
+    """Convert user_id to UUID. Non-UUID strings (e.g. 'voice-ws') get a deterministic UUID5."""
+    if not user_id:
+        return uuid5(NAMESPACE_DNS, "anonymous")
+    try:
+        return UUID(user_id)
+    except (ValueError, TypeError):
+        return uuid5(NAMESPACE_DNS, user_id)
+
 
 def _lazy_import_mortgage_models():
     """Lazy import mortgage models to avoid circular dependency"""
@@ -82,7 +92,7 @@ def create_mortgage_application(user_id: str) -> Dict[str, Any]:
     try:
         # Use enum instance - EnumValueType will convert to value automatically
         application = MortgageApplication(
-            user_id=UUID(user_id),
+            user_id=_user_id_to_uuid(user_id),
             status=ApplicationStatus.DRAFT  # EnumValueType will convert to "draft" value
         )
         db.add(application)
@@ -119,7 +129,7 @@ def get_mortgage_application_status(user_id: str, application_id: Optional[str] 
     db = SessionLocal()
     try:
         query = db.query(MortgageApplication).filter(
-            MortgageApplication.user_id == UUID(user_id)
+            MortgageApplication.user_id == _user_id_to_uuid(user_id)
         )
         
         if application_id:
@@ -206,7 +216,7 @@ def update_mortgage_financial_info(
     db = SessionLocal()
     try:
         query = db.query(MortgageApplication).filter(
-            MortgageApplication.user_id == UUID(user_id)
+            MortgageApplication.user_id == _user_id_to_uuid(user_id)
         )
         
         if application_id:
@@ -284,7 +294,7 @@ def calculate_dti_ratio(user_id: str, application_id: Optional[str] = None) -> D
     db = SessionLocal()
     try:
         query = db.query(MortgageApplication).filter(
-            MortgageApplication.user_id == UUID(user_id)
+            MortgageApplication.user_id == _user_id_to_uuid(user_id)
         )
         
         if application_id:
@@ -363,7 +373,7 @@ def add_mortgage_debt(
     db = SessionLocal()
     try:
         query = db.query(MortgageApplication).filter(
-            MortgageApplication.user_id == UUID(user_id)
+            MortgageApplication.user_id == _user_id_to_uuid(user_id)
         )
         
         if application_id:
@@ -435,7 +445,7 @@ def get_mortgage_debts(user_id: str, application_id: Optional[str] = None) -> Di
     db = SessionLocal()
     try:
         query = db.query(MortgageApplication).filter(
-            MortgageApplication.user_id == UUID(user_id)
+            MortgageApplication.user_id == _user_id_to_uuid(user_id)
         )
         
         if application_id:
@@ -500,7 +510,7 @@ def upload_mortgage_document(
     db = SessionLocal()
     try:
         query = db.query(MortgageApplication).filter(
-            MortgageApplication.user_id == UUID(user_id)
+            MortgageApplication.user_id == _user_id_to_uuid(user_id)
         )
         
         if application_id:
@@ -587,7 +597,7 @@ def get_mortgage_documents(user_id: str, application_id: Optional[str] = None) -
     db = SessionLocal()
     try:
         query = db.query(MortgageApplication).filter(
-            MortgageApplication.user_id == UUID(user_id)
+            MortgageApplication.user_id == _user_id_to_uuid(user_id)
         )
         
         if application_id:
@@ -678,7 +688,7 @@ def get_missing_documents(user_id: str, application_id: Optional[str] = None) ->
     db = SessionLocal()
     try:
         query = db.query(MortgageApplication).filter(
-            MortgageApplication.user_id == UUID(user_id)
+            MortgageApplication.user_id == _user_id_to_uuid(user_id)
         )
         
         if application_id:

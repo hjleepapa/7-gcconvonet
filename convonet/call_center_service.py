@@ -118,6 +118,82 @@ async def tool_execution_ui(request: Request):
     )
 
 
+@app.get("/convonet_tech_spec", response_class=HTMLResponse)
+async def convonet_tech_spec(request: Request):
+    """Technical specification page."""
+    return templates.TemplateResponse(
+        "convonet_tech_spec.html",
+        {"request": request, "url_for": _url_for},
+    )
+
+
+@app.get("/convonet_system_architecture", response_class=HTMLResponse)
+async def convonet_system_architecture(request: Request):
+    """System architecture diagram page."""
+    return templates.TemplateResponse(
+        "convonet_system_architecture.html",
+        {"request": request, "url_for": _url_for},
+    )
+
+
+@app.get("/convonet_sequence_diagram", response_class=HTMLResponse)
+async def convonet_sequence_diagram(request: Request):
+    """Sequence diagram page."""
+    return templates.TemplateResponse(
+        "convonet_sequence_diagram.html",
+        {"request": request, "url_for": _url_for},
+    )
+
+
+# Stub APIs for agent-monitor dashboard (full implementation can use Redis/DB later)
+@app.get("/agent-monitor/api/stats")
+async def agent_monitor_api_stats():
+    """Stub: return empty stats so the dashboard renders until real backend is wired."""
+    return {
+        "success": True,
+        "stats": {
+            "total_interactions": 0,
+            "by_provider": {"claude": 0, "gemini": 0, "openai": 0},
+            "total_tool_calls": 0,
+            "avg_duration_ms": 0,
+        },
+    }
+
+
+@app.get("/agent-monitor/api/interactions")
+async def agent_monitor_api_interactions(limit: int = 50, provider: Optional[str] = None, agent_type: Optional[str] = None):
+    """Stub: return empty list until real backend is wired."""
+    return {"success": True, "interactions": []}
+
+
+# Stub APIs for tool-execution dashboard
+@app.get("/tool-execution/api/stats")
+async def tool_execution_api_stats():
+    """Stub: return empty stats so the dashboard renders until real backend is wired."""
+    return {
+        "success": True,
+        "stats": {
+            "total_successful": 0,
+            "total_failed": 0,
+            "total_timeout": 0,
+            "success_rate": 0.0,
+            "total_requests": 0,
+        },
+    }
+
+
+@app.get("/tool-execution/api/trackers")
+async def tool_execution_api_trackers():
+    """Stub: return empty list until real backend is wired."""
+    return {"success": True, "trackers": []}
+
+
+@app.get("/tool-execution/api/tracker/{request_id}")
+async def tool_execution_api_tracker(request_id: str):
+    """Stub: return empty tools until real backend is wired."""
+    return {"success": True, "tools": []}
+
+
 class AgentStatusUpdate(BaseModel):
     agent_id: str
     status: str # e.g., "Available", "Busy", "Offline"

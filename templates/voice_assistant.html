@@ -12,13 +12,23 @@
         <h1 class="text-2xl font-bold text-gray-800 mb-2">Voice Assistant</h1>
         <p class="text-sm text-gray-600 mb-6">WebRTC / FastAPI WebSocket (voice-gateway-service). No LiveKit.</p>
         <div id="status" class="mb-4 p-3 rounded-lg bg-gray-100 text-gray-700 text-sm">Connecting to <span id="wsUrl"></span>…</div>
+        <div id="authSection" class="mb-4 p-4 rounded-lg bg-amber-50 border border-amber-200">
+            <p class="text-sm text-gray-700 mb-2">Enter your PIN to use the voice assistant (if required by your deployment).</p>
+            <div class="flex gap-2 items-center">
+                <input type="password" id="pinInput" placeholder="PIN" class="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm" maxlength="20" autocomplete="off">
+                <button type="button" id="btnLogin" class="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700">Login</button>
+            </div>
+            <p id="authError" class="mt-2 text-sm text-red-600 hidden"></p>
+        </div>
+        <div id="readySection" class="hidden mb-4">
+            <div class="flex gap-3 justify-center">
+                <button id="btnStart" disabled class="px-6 py-3 rounded-lg bg-orange-500 text-white font-semibold disabled:opacity-50 disabled:cursor-not-allowed">Start</button>
+                <button id="btnStop" disabled class="px-6 py-3 rounded-lg bg-gray-600 text-white font-semibold disabled:opacity-50 disabled:cursor-not-allowed">Stop</button>
+            </div>
+        </div>
         <div id="transcript" class="mb-2 p-2 rounded bg-blue-50 text-sm text-gray-700 hidden"></div>
         <div id="response" class="mb-2 p-2 rounded bg-green-50 text-sm text-gray-700 hidden"></div>
         <div id="log" class="mb-6 h-32 overflow-y-auto rounded bg-gray-50 p-2 text-xs font-mono text-gray-600"></div>
-        <div class="flex gap-3 justify-center">
-            <button id="btnStart" disabled class="px-6 py-3 rounded-lg bg-orange-500 text-white font-semibold disabled:opacity-50 disabled:cursor-not-allowed">Start</button>
-            <button id="btnStop" disabled class="px-6 py-3 rounded-lg bg-gray-600 text-white font-semibold disabled:opacity-50 disabled:cursor-not-allowed">Stop</button>
-        </div>
     </div>
     <script>
         (function () {
@@ -57,15 +67,18 @@
                 log('WS connect ' + wsUrl);
                 ws = new WebSocket(wsUrl);
                 ws.onopen = function () {
-                    setStatus('Connected. Authenticating…', true);
+                    setStatus('Connected. Enter PIN and click Login.', true);
                     log('Connected');
-                    ws.send(JSON.stringify({ type: 'authenticate', session_id: sessionId }));
+                    document.getElementById('authSection').classList.remove('hidden');
+                    document.getElementById('authError').classList.add('hidden');
                 };
                 ws.onmessage = function (ev) {
                     try {
                         const msg = JSON.parse(ev.data);
                         log('← ' + (msg.type || 'message'));
                         if (msg.type === 'auth_ok') {
+                            document.getElementById('authSection').classList.add('hidden');
+                            document.getElementById('readySection').classList.remove('hidden');
                             setStatus('Ready. Click Start, speak, then Stop.', true);
                             document.getElementById('btnStart').disabled = false;
                         }
@@ -88,7 +101,12 @@
                         }
                         if (msg.type === 'error') {
                             log('Error: ' + (msg.message || ''));
-                            setStatus(msg.message || 'Error', false);
+                            if (msg.code === 'auth_failed' || (msg.message && msg.message.toLowerCase().indexOf('pin') !== -1)) {
+                                document.getElementById('authError').textContent = msg.message || 'Invalid PIN.';
+                                document.getElementById('authError').classList.remove('hidden');
+                            } else {
+                                setStatus(msg.message || 'Error', false);
+                            }
                         }
                     } catch (e) { log('← ' + ev.data.slice(0, 80)); }
                 };
@@ -100,6 +118,18 @@
                 };
                 ws.onerror = function () { log('WebSocket error'); };
             }
+
+            function doLogin() {
+                if (!ws || ws.readyState !== WebSocket.OPEN) return;
+                var pin = (document.getElementById('pinInput').value || '').trim();
+                document.getElementById('authError').classList.add('hidden');
+                ws.send(JSON.stringify({ type: 'authenticate', session_id: sessionId, pin: pin }));
+                log('Sent authenticate (PIN ' + (pin ? '***' : 'empty') + ')');
+            }
+            document.getElementById('btnLogin').onclick = doLogin;
+            document.getElementById('pinInput').onkeydown = function (e) {
+                if (e.key === 'Enter') { e.preventDefault(); doLogin(); }
+            };
 
             document.getElementById('btnStart').onclick = function () {
                 if (!ws || ws.readyState !== WebSocket.OPEN) return;
