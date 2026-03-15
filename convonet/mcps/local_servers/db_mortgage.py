@@ -11,10 +11,12 @@ from sqlalchemy.orm import Session, sessionmaker
 from uuid import UUID, uuid4, uuid5, NAMESPACE_DNS
 from datetime import datetime, timezone
 import os
+import re
 import sys
 import logging
 import json
 from decimal import Decimal
+from urllib.parse import urlparse, urlunparse
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -26,11 +28,31 @@ load_dotenv()
 # Initialize FastMCP server
 mcp = FastMCP("Mortgage Application MCP Server")
 
-# Database setup
+# Database setup: support Render short host (dpg-xxx-a) by appending suffix from env
 DB_URI = os.getenv("DB_URI")
 if not DB_URI:
     logger.error("❌ DB_URI environment variable not set")
     sys.exit(1)
+
+# If host looks like Render internal short name (no dots) and suffix is set, append for DNS resolution
+_suffix = os.getenv("RENDER_POSTGRES_HOST_SUFFIX", "").strip()
+if _suffix and not _suffix.startswith("."):
+    _suffix = "." + _suffix
+try:
+    parsed = urlparse(DB_URI)
+    host = (parsed.hostname or "").strip()
+    if host and "." not in host and re.match(r"dpg-[a-z0-9]+-a", host) and _suffix:
+        netloc_parts = []
+        if parsed.username is not None:
+            netloc_parts.append(f"{parsed.username}:{parsed.password or ''}@" if parsed.password else f"{parsed.username}@")
+        netloc_parts.append(host + _suffix)
+        if parsed.port is not None:
+            netloc_parts.append(f":{parsed.port}")
+        new_netloc = "".join(netloc_parts)
+        DB_URI = urlunparse((parsed.scheme, new_netloc, parsed.path or "", "", parsed.query or "", parsed.fragment or ""))
+        logger.info("DB_URI host normalized for Render: %s -> %s", host, host + _suffix)
+except Exception as e:
+    logger.warning("Could not parse DB_URI for Render host normalization: %s", e)
 
 engine = create_engine(DB_URI, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine)

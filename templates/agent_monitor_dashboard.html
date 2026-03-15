@@ -471,17 +471,17 @@
                 const response = await fetch('/agent-monitor/api/stats');
                 const data = await response.json();
 
-                if (data.success) {
+                if (data.success && data.stats) {
                     const stats = data.stats;
-                    document.getElementById('statTotal').textContent = stats.total_interactions;
-                    document.getElementById('statClaude').textContent = stats.by_provider.claude || 0;
-                    document.getElementById('statGemini').textContent = stats.by_provider.gemini || 0;
-                    document.getElementById('statOpenAI').textContent = stats.by_provider.openai || 0;
-                    document.getElementById('statToolCalls').textContent = stats.total_tool_calls;
-                    document.getElementById('statAvgDuration').textContent = Math.round(stats.avg_duration_ms) + 'ms';
+                    const byProvider = stats.by_provider || { claude: 0, gemini: 0, openai: 0 };
+                    document.getElementById('statTotal').textContent = stats.total_interactions ?? 0;
+                    document.getElementById('statClaude').textContent = byProvider.claude ?? 0;
+                    document.getElementById('statGemini').textContent = byProvider.gemini ?? 0;
+                    document.getElementById('statOpenAI').textContent = byProvider.openai ?? 0;
+                    document.getElementById('statToolCalls').textContent = stats.total_tool_calls ?? 0;
+                    document.getElementById('statAvgDuration').textContent = Math.round(stats.avg_duration_ms || 0) + 'ms';
 
-                    // Update chart
-                    updateProviderChart(stats.by_provider);
+                    updateProviderChart(byProvider);
                 }
             } catch (error) {
                 console.error('Error loading stats:', error);
@@ -489,28 +489,37 @@
         }
 
         function updateProviderChart(byProvider) {
-            const ctx = document.getElementById('providerChart').getContext('2d');
+            const canvas = document.getElementById('providerChart');
+            if (!canvas) return;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) return;
 
             if (providerChart) {
                 providerChart.destroy();
+                providerChart = null;
             }
 
-            const labels = Object.keys(byProvider);
-            const values = Object.values(byProvider);
+            const labels = Object.keys(byProvider || {}).length ? Object.keys(byProvider) : ['No data'];
+            const rawValues = Object.values(byProvider || {}).length ? Object.values(byProvider) : [0];
+            const total = rawValues.reduce((a, b) => a + b, 0);
+            // Chart.js can throw when all doughnut values are 0 (e.g. reading .payload on undefined). Use one "No data" slice when total is 0.
+            const values = total > 0 ? rawValues : [1];
+            const displayLabels = total > 0 ? labels : ['No interactions yet'];
             const colors = {
                 'claude': '#d97706',
                 'gemini': '#059669',
                 'openai': '#2563eb',
-                'unknown': '#6b7280'
+                'unknown': '#6b7280',
+                'No interactions yet': '#94a3b8'
             };
 
             providerChart = new Chart(ctx, {
                 type: 'doughnut',
                 data: {
-                    labels: labels,
+                    labels: displayLabels,
                     datasets: [{
                         data: values,
-                        backgroundColor: labels.map(l => colors[l] || colors['unknown']),
+                        backgroundColor: displayLabels.map(l => colors[l] || colors['unknown']),
                         borderWidth: 2,
                         borderColor: '#fff'
                     }]
@@ -521,6 +530,16 @@
                     plugins: {
                         legend: {
                             position: 'bottom'
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    if (total === 0) return 'No interactions yet';
+                                    const v = context.raw;
+                                    const pct = total ? ((v / total) * 100).toFixed(1) : 0;
+                                    return context.label + ': ' + v + ' (' + pct + '%)';
+                                }
+                            }
                         }
                     }
                 }
@@ -541,7 +560,7 @@
                 const data = await response.json();
 
                 if (data.success) {
-                    displayInteractions(data.interactions);
+                    displayInteractions(Array.isArray(data.interactions) ? data.interactions : []);
                 } else {
                     document.getElementById('interactionsList').innerHTML =
                         '<div class="loading">Error loading interactions</div>';
@@ -549,14 +568,14 @@
             } catch (error) {
                 console.error('Error loading interactions:', error);
                 document.getElementById('interactionsList').innerHTML =
-                    '<div class="loading">Error loading interactions</div>';
+                        '<div class="loading">Error loading interactions</div>';
             }
         }
 
         function displayInteractions(interactions) {
             const container = document.getElementById('interactionsList');
-
-            if (interactions.length === 0) {
+            if (!container) return;
+            if (!Array.isArray(interactions) || interactions.length === 0) {
                 container.innerHTML = '<div class="loading">No interactions found</div>';
                 return;
             }
@@ -568,27 +587,30 @@
                 'healthcare': { icon: '🏥', color: '#ef4444', label: 'Healthcare' }
             };
 
-            container.innerHTML = interactions.map(interaction => {
-                const toolCallsCount = interaction.tool_calls ? interaction.tool_calls.length : 0;
+            container.innerHTML = interactions.filter(i => i != null).map(interaction => {
+                const toolCalls = Array.isArray(interaction.tool_calls) ? interaction.tool_calls.filter(t => t != null) : [];
+                const toolCallsCount = toolCalls.length;
                 const provider = interaction.provider || 'unknown';
                 const status = interaction.status || 'success';
-                const agentType = interaction.metadata?.agent_type || 'todo';
+                const agentType = (interaction.metadata && interaction.metadata.agent_type) ? interaction.metadata.agent_type : 'todo';
                 const domainStyle = domainStyles[agentType] || domainStyles['todo'];
+                const requestId = interaction.request_id || '';
+                const dateTime = interaction.datetime || interaction.timestamp || new Date().toISOString();
 
                 return `
-                    <div class="interaction-item" onclick="toggleInteractionDetails('${interaction.request_id}')">
+                    <div class="interaction-item" onclick="toggleInteractionDetails('${String(requestId).replace(/\\/g, '\\\\').replace(/'/g, "\\'")}')">
                         <div class="interaction-header">
                             <div>
-                                <div class="interaction-id">${interaction.request_id}</div>
-                                <div class="interaction-time">${new Date(interaction.datetime).toLocaleString()}</div>
+                                <div class="interaction-id">${escapeHtml(requestId)}</div>
+                                <div class="interaction-time">${new Date(dateTime).toLocaleString()}</div>
                             </div>
                             <div class="interaction-meta">
                                 <span class="meta-badge" style="background: ${domainStyle.color}20; color: ${domainStyle.color}; border: 1px solid ${domainStyle.color}40;">${domainStyle.icon} ${domainStyle.label}</span>
                                 <span class="meta-badge provider-${provider}">${provider.toUpperCase()}</span>
                                 <span class="meta-badge status-${status}">${status.toUpperCase()}</span>
-                                ${interaction.model ? `<span class="meta-badge">${interaction.model}</span>` : ''}
-                                ${interaction.metadata?.stt_provider ? `<span class="meta-badge" style="background: #e0f2fe; color: #0369a1;">🎤 STT: ${interaction.metadata.stt_provider.toUpperCase()} ${interaction.metadata.stt_latency_ms ? `(${Math.round(interaction.metadata.stt_latency_ms)}ms)` : ''}</span>` : ''}
-                                ${interaction.metadata?.tts_provider ? `<span class="meta-badge" style="background: #fdf2f8; color: #be185d;">🔊 TTS: ${interaction.metadata.tts_provider.toUpperCase()} ${interaction.metadata.tts_latency_ms ? `(${Math.round(interaction.metadata.tts_latency_ms)}ms)` : ''}</span>` : ''}
+                                ${interaction.model ? `<span class="meta-badge">${escapeHtml(interaction.model)}</span>` : ''}
+                                ${interaction.metadata && interaction.metadata.stt_provider ? `<span class="meta-badge" style="background: #e0f2fe; color: #0369a1;">🎤 STT: ${String(interaction.metadata.stt_provider).toUpperCase()} ${interaction.metadata.stt_latency_ms ? `(${Math.round(interaction.metadata.stt_latency_ms)}ms)` : ''}</span>` : ''}
+                                ${interaction.metadata && interaction.metadata.tts_provider ? `<span class="meta-badge" style="background: #fdf2f8; color: #be185d;">🔊 TTS: ${String(interaction.metadata.tts_provider).toUpperCase()} ${interaction.metadata.tts_latency_ms ? `(${Math.round(interaction.metadata.tts_latency_ms)}ms)` : ''}</span>` : ''}
                                 ${toolCallsCount > 0 ? `<span class="meta-badge tool-calls-badge">${toolCallsCount} tools</span>` : ''}
                                 ${interaction.duration_ms ? `<span class="meta-badge">${Math.round(interaction.duration_ms)}ms</span>` : ''}
                             </div>
@@ -603,19 +625,23 @@
                                 <p>${escapeHtml(interaction.agent_response || 'N/A')}</p>
                             </div>
                         </div>
-                        <div id="details-${interaction.request_id}" class="interaction-details" style="display: none;">
+                        <div id="details-${String(requestId).replace(/"/g, '&quot;')}" class="interaction-details" style="display: none;">
                             ${toolCallsCount > 0 ? `
-                                <h4 style="margin-bottom: 15px;">Tool Calls (${toolCallsCount})</h4>
-                                ${interaction.tool_calls.map(tc => `
-                                    <div class="tool-call-item">
-                                        <div class="tool-call-name">${tc.tool_name}</div>
-                                        <div class="tool-call-args">${JSON.stringify(tc.arguments, null, 2)}</div>
-                                        ${tc.result ? `<div class="tool-call-result">✅ Result: ${escapeHtml(JSON.stringify(tc.result).substring(0, 200))}</div>` : ''}
-                                        ${tc.error ? `<div class="tool-call-error">❌ Error: ${escapeHtml(tc.error)}</div>` : ''}
-                                        ${tc.duration_ms ? `<div style="font-size: 11px; color: #999; margin-top: 4px;">Duration: ${Math.round(tc.duration_ms)}ms</div>` : ''}
-                                        ${(typeof tc.elapsed_from_stop_ms === 'number' && !isNaN(tc.elapsed_from_stop_ms)) ? `<div style="font-size: 11px; color: #0ea5e9; margin-top: 4px;">Elapsed from stop: T+${Math.round(tc.elapsed_from_stop_ms)}ms</div>` : ''}
-                                    </div>
-                                `).join('')}
+                                <h4 style="margin-bottom: 12px;">Tool Calls (${toolCallsCount})</h4>
+                                ${toolCalls.map(tc => {
+                                    const argsStr = JSON.stringify(tc.arguments != null ? tc.arguments : {}, null, 2);
+                                    const resultStr = tc.result != null ? (typeof tc.result === 'string' ? tc.result : JSON.stringify(tc.result)) : '';
+                                    const resultSnippet = resultStr.length > 500 ? resultStr.substring(0, 500) + '…' : resultStr;
+                                    const elapsedLine = (typeof tc.elapsed_from_stop_ms === 'number' && !isNaN(tc.elapsed_from_stop_ms)) ? `Elapsed from stop: T+${Math.round(tc.elapsed_from_stop_ms)}ms` : '';
+                                    return `
+                                    <div class="tool-call-item" style="margin-bottom: 16px; font-family: ui-monospace, monospace; font-size: 13px;">
+                                        <div style="font-weight: 600; color: #1e293b;">${escapeHtml(tc.tool_name || 'unknown')}</div>
+                                        <div style="margin: 4px 0; color: #475569; white-space: pre-wrap; word-break: break-all;">${escapeHtml(argsStr)}</div>
+                                        ${tc.error ? `<div style="color: #dc2626;">❌ Error: ${escapeHtml(tc.error)}</div>` : ''}
+                                        ${resultStr ? `<div style="margin: 4px 0;">✅ Result: "${escapeHtml(resultSnippet)}"</div>` : ''}
+                                        ${elapsedLine ? `<div style="font-size: 12px; color: #0ea5e9; margin-top: 4px;">${elapsedLine}</div>` : ''}
+                                    </div>`;
+                                }).join('')}
                             ` : '<p style="color: #999;">No tool calls</p>'}
                             ${(interaction.metadata?.source === 'voice' || interaction.metadata?.stt_provider) ? (function() {
                                 const vt = interaction.metadata.voice_timing || {};
@@ -628,7 +654,7 @@
                                     { key: 'stt_ms', event: 'STT complete', ms: vt.stt_ms },
                                     { key: 'agent_start_ms', event: 'Agent/LLM processing started', ms: vt.agent_start_ms },
                                     { key: 'first_sentence_ms', event: 'First sentence from LLM', ms: vt.first_sentence_ms },
-                                    { key: 'first_audio_ms', event: 'First audio → LiveKit (user hears)', ms: vt.first_audio_ms },
+                                    { key: 'first_audio_ms', event: 'First audio (user hears)', ms: vt.first_audio_ms },
                                     { key: 'total_ms', event: 'Processing complete', ms: vt.total_ms, isTotal: true }
                                 ];
                                 const steps = allSteps.filter(s => s.ms != null || s.key === 't0').sort((a,b) => (a.ms || 0) - (b.ms || 0));

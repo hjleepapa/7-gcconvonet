@@ -2028,7 +2028,10 @@ async def _run_agent_async(
             # For voice: elapsed from user stop; for text: elapsed from agent start
             voice_t0 = (metadata or {}).get('t0')
             t0_for_elapsed = voice_t0 if voice_t0 is not None else process_start_time
-            
+            # Record agent_start_ms for voice_timing (agent-monitor dashboard)
+            if voice_t0 is not None and metadata and isinstance(metadata.get('voice_timing'), dict):
+                metadata['voice_timing']['agent_start_ms'] = (time_module.time() - voice_t0) * 1000
+
             # HYBRID STREAMING: Use native Gemini SDK for streaming, LangGraph for tool execution
             if is_gemini:
                 print(f"🚀 Using native Gemini SDK for hybrid streaming...", flush=True)

@@ -20,7 +20,7 @@ API keys and secrets are **not** in the repo or in the build. Set them as **envi
 |--------|------------------|
 | **voice-gateway-service** | `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `REDIS_DB=0`, `DB_URI`; `AGENT_LLM_URL` (agent-llm URL); Twilio: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER`, `TWILIO_TRANSFER_CALLER_ID`, `FREEPBX_DOMAIN`. Optional STT/TTS if wired: `DEEPGRAM_API_KEY`, `ELEVENLABS_API_KEY`, `CARTESIA_API_KEY`, etc. |
 | **agent-llm-service** | `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `REDIS_DB=0`, `DB_URI`; LLM: `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_MODEL`; optional for provider checks: `DEEPGRAM_API_KEY`, `ELEVENLABS_API_KEY`, `CARTESIA_API_KEY`, `CARTESIA_*`. |
-| **call-center-service** | `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `REDIS_DB=0`, `DB_URI` (if you add DB/Redis). Optional: `CONVONET_API_BASE`, `VOICE_ASSISTANT_URL`, `MORTGAGE_DASHBOARD_URL` for links (see below). |
+| **call-center-service** | `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `REDIS_DB=0` (required for **Agent Monitor** to show interactions—agent-llm writes to Redis, call-center reads). `DB_URI` if you add DB. Optional: `CONVONET_API_BASE`, `VOICE_ASSISTANT_URL`, `MORTGAGE_DASHBOARD_URL` for links; `SIP_DOMAIN`, `SIP_WSS_PORT` for Call Center UI (SIP server for agents). |
 | **crm-integration-service** | `REDIS_*` if used; SuiteCRM: `SUITECRM_BASE_URL`, `SUITECRM_CLIENT_ID`, `SUITECRM_CLIENT_SECRET`, `SUITECRM_USERNAME`, `SUITECRM_PASSWORD`. Optional: `DATABASE_URL` (MySQL for SuiteCRM). |
 
 **CONVONET_API_BASE, VOICE_ASSISTANT_URL, MORTGAGE_DASHBOARD_URL (single domain v2.convonetai.com):**  
@@ -45,6 +45,8 @@ For production, use **Secret Manager** and `--set-secrets` so secrets don’t ap
 | `REDIS_PASSWORD` | All services       | *(secret)* |
 | `REDIS_DB`     | All services         | Numeric Redis DB index `0`–`15`. If your Redis Cloud has one logical DB, use `0`. |
 | `DB_URI`       | Agent-LLM, Call Center, Voice Gateway, etc. | `postgresql://user:pass@host/dbname` (Render connection string) |
+
+**Render PostgreSQL – use full hostname:** If you use Render.com Postgres, `DB_URI` must use the **full external hostname**, not the short internal one. In the Render dashboard, use the **External** connection string. The host must look like `dpg-xxxx-a.oregon-postgres.render.com` (or your region). If you use only `dpg-d0nkb5jipnbc7393afi0-a` (no domain), you will get **"could not translate host name ... to address: Temporary failure in name resolution"**. **Fix (either):** (1) Set `DB_URI` to the full URL, e.g. `postgresql://user:pass@dpg-d0nkb5jipnbc7393afi0-a.oregon-postgres.render.com/posts_8uci`; or (2) keep the short host in `DB_URI` and set **`RENDER_POSTGRES_HOST_SUFFIX=.oregon-postgres.render.com`** (or your region) on the service so the app appends it for DNS (used by agent-llm-service / mortgage tools).
 
 **Voice PIN (voice-gateway-service):** When `ENABLE_VOICE_PIN=true`, the WebSocket voice assistant requires a PIN before Start. If `DB_URI` is set, the PIN is validated against the **`users_anthropic`** table (column `voice_pin`, active users only). The authenticated user’s `id` and name are then used for the agent and mortgage tools. If `DB_URI` is not set, the env var `VOICE_PIN` is used as the only valid PIN. Set `DB_URI` on voice-gateway to use your Postgres (e.g. `jdbc:postgresql://...` → use the same URL as `postgresql://...` for SQLAlchemy).
 

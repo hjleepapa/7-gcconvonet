@@ -72,12 +72,26 @@ async def landing_page(request: Request):
     return templates.TemplateResponse("index.html", context)
 
 
+def _get_sip_config() -> dict:
+    """SIP config for call center UI (domain, wss_port). Uses env or defaults."""
+    domain = os.getenv("SIP_DOMAIN", "sip.example.com").strip()
+    try:
+        wss_port = int(os.getenv("SIP_WSS_PORT", "7443"))
+    except ValueError:
+        wss_port = 7443
+    return {"domain": domain, "wss_port": wss_port}
+
+
 @app.get("/call-center", response_class=HTMLResponse)
 async def call_center_ui(request: Request):
     """Serves the Unified Agent Desktop UI"""
     return templates.TemplateResponse(
         "call_center.html",
-        {"request": request, "url_for": _url_for},
+        {
+            "request": request,
+            "url_for": _url_for,
+            "sip_config": _get_sip_config(),
+        },
     )
 
 
@@ -113,7 +127,7 @@ async def agent_monitor_ui(request: Request):
 async def tool_execution_ui(request: Request):
     """Tool execution dashboard UI."""
     return templates.TemplateResponse(
-        "tool_execution_dashboard.html",
+        "templates/tool_execution_dashboard.html",
         {"request": request, "url_for": _url_for},
     )
 
@@ -131,7 +145,7 @@ async def convonet_tech_spec(request: Request):
 async def convonet_system_architecture(request: Request):
     """System architecture diagram page."""
     return templates.TemplateResponse(
-        "convonet_system_architecture.html",
+        "templates/convonet_system_architecture.html",
         {"request": request, "url_for": _url_for},
     )
 
@@ -145,25 +159,84 @@ async def convonet_sequence_diagram(request: Request):
     )
 
 
-# Stub APIs for agent-monitor dashboard (full implementation can use Redis/DB later)
+# Agent-monitor dashboard APIs: read from Redis (same store agent-llm-service writes to via AgentMonitor)
+def _get_agent_monitor_safe():
+    """Return AgentMonitor instance or None if Redis/agent_monitor unavailable."""
+    try:
+        from convonet.agent_monitor import get_agent_monitor
+        return get_agent_monitor()
+    except Exception as e:
+        logger.warning("Agent monitor unavailable (Redis may be unset on call-center): %s", e)
+        return None
+
+
 @app.get("/agent-monitor/api/stats")
 async def agent_monitor_api_stats():
-    """Stub: return empty stats so the dashboard renders until real backend is wired."""
-    return {
-        "success": True,
-        "stats": {
-            "total_interactions": 0,
-            "by_provider": {"claude": 0, "gemini": 0, "openai": 0},
-            "total_tool_calls": 0,
-            "avg_duration_ms": 0,
-        },
-    }
+    """Return agent interaction stats from Redis (written by agent-llm-service)."""
+    monitor = _get_agent_monitor_safe()
+    if not monitor:
+        return {
+            "success": True,
+            "stats": {
+                "total_interactions": 0,
+                "by_provider": {"claude": 0, "gemini": 0, "openai": 0},
+                "total_tool_calls": 0,
+                "avg_duration_ms": 0,
+            },
+        }
+    try:
+        stats = monitor.get_stats()
+        by_provider = stats.get("by_provider") or {}
+        # Ensure keys expected by dashboard exist
+        by_provider = {
+            "claude": by_provider.get("claude", 0),
+            "gemini": by_provider.get("gemini", 0),
+            "openai": by_provider.get("openai", 0),
+            **{k: v for k, v in by_provider.items() if k not in ("claude", "gemini", "openai")},
+        }
+        return {
+            "success": True,
+            "stats": {
+                "total_interactions": stats.get("total_interactions", 0),
+                "by_provider": by_provider,
+                "total_tool_calls": stats.get("total_tool_calls", 0),
+                "avg_duration_ms": stats.get("avg_duration_ms", 0),
+            },
+        }
+    except Exception as e:
+        logger.exception("Error fetching agent-monitor stats")
+        return {
+            "success": True,
+            "stats": {
+                "total_interactions": 0,
+                "by_provider": {"claude": 0, "gemini": 0, "openai": 0},
+                "total_tool_calls": 0,
+                "avg_duration_ms": 0,
+            },
+        }
 
 
 @app.get("/agent-monitor/api/interactions")
 async def agent_monitor_api_interactions(limit: int = 50, provider: Optional[str] = None, agent_type: Optional[str] = None):
-    """Stub: return empty list until real backend is wired."""
-    return {"success": True, "interactions": []}
+    """Return recent agent interactions from Redis (written by agent-llm-service)."""
+    monitor = _get_agent_monitor_safe()
+    if not monitor:
+        return {"success": True, "interactions": []}
+    try:
+        if provider and provider != "all":
+            interactions = monitor.get_interactions_by_provider(provider, limit=limit)
+        else:
+            interactions = monitor.get_recent_interactions(limit=limit)
+        interactions_data = [i.to_dict() for i in interactions]
+        if agent_type and agent_type != "all":
+            interactions_data = [
+                i for i in interactions_data
+                if (i.get("metadata") or {}).get("agent_type") == agent_type
+            ]
+        return {"success": True, "interactions": interactions_data}
+    except Exception as e:
+        logger.exception("Error fetching agent-monitor interactions")
+        return {"success": True, "interactions": []}
 
 
 # Stub APIs for tool-execution dashboard

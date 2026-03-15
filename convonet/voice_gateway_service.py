@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import os
+import time
 import uuid
 import logging
 from typing import Dict, Optional, List, Any, Tuple
@@ -123,23 +124,44 @@ def _run_stt_tts_pipeline_sync(
     language: str,
     user_id: Optional[str] = None,
     user_name: Optional[str] = None,
+    t0: Optional[float] = None,
 ) -> Tuple[Optional[str], Optional[str], Optional[bytes]]:
     """Run STT -> agent -> TTS synchronously (call from thread). Returns (transcript, agent_text, tts_audio_bytes)."""
     transcript = None
     agent_text = None
     tts_audio = None
     uid = user_id or "voice-ws"
+    if t0 is None:
+        t0 = time.time()
     try:
+        # Buffer captured / process_audio_async entered (same moment in batch pipeline)
+        buffer_capture_ms = (time.time() - t0) * 1000
         # STT (Deepgram batch)
         from convonet.deepgram import transcribe_audio_with_deepgram_webrtc
         transcript = transcribe_audio_with_deepgram_webrtc(audio_bytes, language=language or "en")
+        stt_ms = (time.time() - t0) * 1000
         if not transcript or not transcript.strip():
             return (None, None, None)
-        # Agent LLM (use authenticated user_id from users_anthropic when available)
+        # Agent LLM: send metadata so agent-monitor can show tool calls and voice response timing
         agent_url = f"{AGENT_LLM_URL}/agent/process"
-        payload = {"prompt": transcript, "user_id": uid, "session_id": session_id}
+        payload = {
+            "prompt": transcript,
+            "user_id": uid,
+            "session_id": session_id,
+        }
         if user_name:
             payload["user_name"] = user_name
+        payload["metadata"] = {
+            "source": "voice",
+            "t0": t0,
+            "stt_provider": "deepgram",
+            "tts_provider": "deepgram",
+            "voice_timing": {
+                "buffer_capture_ms": round(buffer_capture_ms, 0),
+                "process_audio_async_ms": round(buffer_capture_ms, 0),
+                "stt_ms": round(stt_ms, 0),
+            },
+        }
         resp = requests.post(agent_url, json=payload, timeout=30)
         resp.raise_for_status()
         data = resp.json()
@@ -163,8 +185,11 @@ async def _run_pipeline_and_send(
     language: str,
     user_id: Optional[str] = None,
     user_name: Optional[str] = None,
+    t0: Optional[float] = None,
 ) -> None:
-    """Run STT -> agent -> TTS in executor and send results over WebSocket."""
+    """Run STT -> agent -> TTS in executor and send results over WebSocket. t0 = when user clicked stop (for voice_timing)."""
+    if t0 is None:
+        t0 = time.time()
     loop = asyncio.get_event_loop()
     try:
         await websocket.send_json(
@@ -178,6 +203,7 @@ async def _run_pipeline_and_send(
             language,
             user_id,
             user_name,
+            t0,
         )
         if not transcript or not transcript.strip():
             await websocket.send_json(
@@ -418,6 +444,7 @@ async def websocket_endpoint(websocket: WebSocket):
                             ).model_dump(mode="json")
                         )
                     else:
+                        t0 = time.time()  # T0 = user clicked "Click to stop" for agent-monitor voice_timing
                         asyncio.create_task(
                             _run_pipeline_and_send(
                                 websocket,
@@ -426,6 +453,7 @@ async def websocket_endpoint(websocket: WebSocket):
                                 language,
                                 user_id=state.get("user_id"),
                                 user_name=state.get("user_name"),
+                                t0=t0,
                             )
                         )
                     
