@@ -95,6 +95,8 @@ gcloud builds submit --config cloudbuild-voice-callcenter.yaml .
 
 Set env vars once per service in Cloud Run (Console → service → Edit & deploy new revision → Variables & secrets). See [docs/CLOUD_RUN_ENV.md](docs/CLOUD_RUN_ENV.md).
 
+**Legacy:** The repo still contains a Flask + Socket.IO monolith (`app.py`, `passenger_wsgi.py`) for local or historical use. See [docs/LEGACY_MONOLITH.md](docs/LEGACY_MONOLITH.md). Primary deployment is GCP.
+
 ---
 
 ## 🏗️ Architecture (GCP)

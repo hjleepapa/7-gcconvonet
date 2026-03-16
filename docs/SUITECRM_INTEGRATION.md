@@ -14,7 +14,7 @@ SUITECRM_USERNAME=admin          # SuiteCRM admin username
 SUITECRM_PASSWORD=your_password   # SuiteCRM admin password
 ```
 
-**Render:** `render.yaml` lists these with `sync: false` – you must add the values manually in the Render dashboard. If missing, `check_patient_exists` and other SuiteCRM tools will return "Authentication failed". Check Render logs for `⚠️ MCP config: SUITECRM_* NOT SET` at startup.
+**Env (GCP / Render):** Set `SUITECRM_*` in the service environment (e.g. Cloud Run → crm-integration-service, or Render dashboard if using legacy monolith). If missing, `check_patient_exists` and other SuiteCRM tools will return "Authentication failed". Check Render logs for `⚠️ MCP config: SUITECRM_* NOT SET` at startup.
 
 ## OAuth2 RSA Keys (Required)
 

@@ -12,6 +12,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError, BaseModel
 from twilio.twiml.voice_response import VoiceResponse, Gather
+from urllib.parse import quote
 import requests
 
 from convonet.schemas import (
@@ -58,27 +59,137 @@ def get_webhook_base_url():
     ).rstrip("/")
 
 
+def _initiate_twilio_transfer_call(extension: str) -> Tuple[bool, Optional[str], Optional[str]]:
+    """
+    Match monolith: use Twilio REST API to create an outbound call to sip:{extension}@domain
+    with Url=transfer_bridge so Twilio will POST to our transfer_bridge when the call connects.
+    Returns (success, agent_call_sid, error_message).
+    """
+    account_sid = os.getenv("TWILIO_ACCOUNT_SID")
+    auth_token = os.getenv("TWILIO_AUTH_TOKEN")
+    caller_id = (
+        os.getenv("TWILIO_TRANSFER_CALLER_ID")
+        or os.getenv("TWILIO_CALLER_ID")
+        or os.getenv("TWILIO_PHONE_NUMBER", "")
+    )
+    base_url = get_webhook_base_url()
+    domain = os.getenv("FUSIONPBX_SIP_DOMAIN") or os.getenv("FREEPBX_DOMAIN", "")
+    transport = (os.getenv("FUSIONPBX_SIP_TRANSPORT") or "udp").lower()
+    if not (account_sid and auth_token and caller_id and base_url and domain):
+        missing = [k for k, v in [
+            ("TWILIO_ACCOUNT_SID", account_sid),
+            ("TWILIO_AUTH_TOKEN", auth_token),
+            ("TWILIO_TRANSFER_CALLER_ID/PHONE_NUMBER", caller_id),
+            ("WEBHOOK_BASE_URL / VOICE_GATEWAY_PUBLIC_URL", base_url),
+            ("FREEPBX_DOMAIN / FUSIONPBX_SIP_DOMAIN", domain),
+        ] if not v]
+        msg = f"Transfer aborted: missing config: {', '.join(missing)}"
+        logger.info("Twilio REST transfer skipped: %s", msg)
+        return False, None, msg
+    try:
+        from twilio.rest import Client
+    except ImportError:
+        logger.warning("twilio.rest not available; install twilio for REST transfer")
+        return False, None, "twilio package not installed"
+    transfer_url = f"{base_url}/twilio/voice_assistant/transfer_bridge?extension={quote(extension)}"
+    sip_target = f"sip:{extension}@{domain};transport={transport}"
+    client = Client(account_sid, auth_token)
+    try:
+        agent_call = client.calls.create(
+            to=sip_target,
+            from_=caller_id,
+            url=transfer_url,
+            method="POST",
+        )
+        logger.info(
+            "Twilio REST: created outbound call to %s (Call SID: %s), Twilio will POST to transfer_bridge",
+            sip_target,
+            agent_call.sid,
+        )
+        return True, agent_call.sid, None
+    except Exception as e:
+        logger.exception("Twilio REST create call failed: %s", e)
+        return False, None, str(e)
+
+
+# Redis key prefix for per-session conversation history (voice gateway accumulates full session)
+VOICE_SESSION_HISTORY_KEY = "voice:session:{}:history"
+VOICE_SESSION_HISTORY_TTL = 3600  # 1 hour
+
+
+def _append_voice_session_history(
+    session_or_call_id: str,
+    user_content: str,
+    assistant_content: str,
+) -> None:
+    """Append one user/assistant turn to the session's conversation history in Redis (full history for call-center)."""
+    if not session_or_call_id or (not user_content and not assistant_content):
+        return
+    try:
+        from convonet.redis_manager import redis_manager
+        if not redis_manager.is_available():
+            return
+        key = VOICE_SESSION_HISTORY_KEY.format(session_or_call_id)
+        raw = redis_manager.redis_client.get(key)
+        history = json.loads(raw) if raw else []
+        if user_content:
+            history.append({"role": "user", "content": user_content})
+        if assistant_content:
+            history.append({"role": "assistant", "content": assistant_content})
+        redis_manager.redis_client.setex(key, VOICE_SESSION_HISTORY_TTL, json.dumps(history))
+    except Exception as e:
+        logger.warning("Failed to append voice session history: %s", e)
+
+
+def _get_voice_session_history(session_or_call_id: str) -> List[Dict[str, str]]:
+    """Return the full conversation history for this session/call from Redis."""
+    if not session_or_call_id:
+        return []
+    try:
+        from convonet.redis_manager import redis_manager
+        if not redis_manager.is_available():
+            return []
+        key = VOICE_SESSION_HISTORY_KEY.format(session_or_call_id)
+        raw = redis_manager.redis_client.get(key)
+        if not raw:
+            return []
+        return json.loads(raw) if isinstance(raw, str) else raw
+    except Exception as e:
+        logger.warning("Failed to get voice session history: %s", e)
+        return []
+
+
 def _cache_transfer_context_for_call_center(
     extension: str,
     transfer_context: Dict[str, Any],
     call_sid: Optional[str] = None,
     call_id: Optional[str] = None,
 ) -> None:
-    """Store transfer context (conversation history, user) in Redis for call-center UI. Key: callcenter:customer:{extension}:{call_sid|call_id}."""
+    """Store transfer context (conversation history, user, activities, suitecrm) in Redis for call-center UI. Key: callcenter:customer:{extension}:{call_sid|call_id}."""
     if not extension or not transfer_context:
         return
     try:
         from convonet.redis_manager import redis_manager
         if not redis_manager.is_available():
             return
+        # Prefer full session history accumulated in voice gateway; fallback to agent-provided history
+        session_id = call_id or call_sid
+        full_history = _get_voice_session_history(session_id) if session_id else []
+        agent_history = transfer_context.get("conversation_history") or []
+        if len(full_history) >= len(agent_history):
+            conversation_history = full_history
+        else:
+            conversation_history = agent_history
         profile = {
             "extension": extension,
             "customer_id": transfer_context.get("user_id") or "unknown",
             "name": transfer_context.get("user_name") or "Voice Caller",
-            "phone": "",
+            "phone": transfer_context.get("phone") or "",
+            "email": transfer_context.get("email") or "",
             "notes": "Transferred from voice assistant",
-            "conversation_history": transfer_context.get("conversation_history") or [],
-            "activities": [],
+            "conversation_history": conversation_history,
+            "activities": transfer_context.get("activities") or [],
+            "suitecrm_context": transfer_context.get("suitecrm_context") or {},
         }
         if call_sid:
             profile["call_sid"] = call_sid
@@ -89,7 +200,7 @@ def _cache_transfer_context_for_call_center(
         else:
             return
         redis_manager.redis_client.setex(key, 300, json.dumps(profile))
-        logger.info("Cached transfer context for call-center: %s", key)
+        logger.info("Cached transfer context for call-center: %s (history_len=%s)", key, len(conversation_history))
         fallback_key = f"callcenter:customer:{extension}"
         redis_manager.redis_client.setex(fallback_key, 300, json.dumps(profile))
     except Exception as e:
@@ -288,12 +399,14 @@ def _run_stt_tts_pipeline_sync(
                 "stt_ms": round(stt_ms, 0),
             },
         }
-        resp = requests.post(agent_url, json=payload, timeout=30)
+        resp = requests.post(agent_url, json=payload, timeout=90)
         resp.raise_for_status()
         data = resp.json()
         agent_text = data.get("response") or ""
         transfer_marker = data.get("transfer_marker")
         transfer_context = data.get("transfer_context")
+        # Accumulate full conversation for call-center (so transfer shows full history)
+        _append_voice_session_history(session_id, transcript, agent_text or "")
         if transfer_marker and transfer_context:
             ext, _dept, _reason = _parse_transfer_marker(transfer_marker)
             _cache_transfer_context_for_call_center(ext, transfer_context, call_sid=None, call_id=session_id)
@@ -362,6 +475,16 @@ async def _run_pipeline_and_send(
         await websocket.send_json(
             AgentFinalMessage(session_id=session_id, text=agent_text, transfer_marker=transfer_marker).model_dump(mode="json")
         )
+        # Monolith-style: when transfer is requested, create outbound call via Twilio REST so 2001 receives a call (Twilio will POST to transfer_bridge)
+        if transfer_marker:
+            ext, _dept, _reason = _parse_transfer_marker(transfer_marker)
+            ext = ext or "2001"
+            logger.info("Attempting Twilio REST transfer to extension %s (transfer_marker present)", ext)
+            ok, call_sid, err = _initiate_twilio_transfer_call(ext)
+            if ok:
+                logger.info("Twilio REST transfer initiated for extension %s (Call SID: %s); Twilio will POST to transfer_bridge when 2001 connects", ext, call_sid)
+            else:
+                logger.info("Twilio REST transfer NOT initiated: %s", err or "unknown")
         if tts_audio:
             b64 = base64.b64encode(tts_audio).decode("utf-8")
             await websocket.send_json(
@@ -434,16 +557,41 @@ async def verify_pin(request: Request):
 
 @app.post("/twilio/process_audio")
 async def process_audio(request: Request, user_id: str = Query(...)):
-    """Sends transcription to Agent LLM and returns TwiML response"""
+    """Sends transcription to Agent LLM and returns TwiML response. Matches monolith: keyword transfer shortcut before calling agent."""
     form_data = await request.form()
-    transcription = form_data.get("SpeechResult")
+    transcription = (form_data.get("SpeechResult") or "").strip()
     call_sid = form_data.get("CallSid")
+    caller_number = form_data.get("From")
     
     if not transcription:
         response = VoiceResponse()
         response.say("I didn't hear anything. Please try again.", voice='Polly.Amy')
         response.redirect(f'/twilio/process_audio?user_id={user_id}')
         return Response(content=str(response), media_type="text/xml")
+    
+    # Monolith-style: if user clearly asked for transfer, return TwiML Dial immediately (no agent call)
+    try:
+        from convonet.voice_intent_utils import has_transfer_intent
+        if has_transfer_intent(transcription):
+            ext = os.getenv("VOICE_AGENT_FALLBACK_EXTENSION", "2001")
+            dept = os.getenv("VOICE_AGENT_FALLBACK_DEPARTMENT", "support")
+            # Accumulate this turn and cache full history for call-center
+            _append_voice_session_history(call_sid, transcription, "I'll connect you to a human agent now.")
+            full_history = _get_voice_session_history(call_sid)
+            ctx = {
+                "conversation_history": full_history,
+                "user_id": user_id,
+                "user_name": None,
+                "phone": caller_number,
+                "activities": [],
+                "suitecrm_context": {},
+            }
+            _cache_transfer_context_for_call_center(ext, ctx, call_sid=call_sid, call_id=None)
+            twiml = _build_transfer_twiml(ext, dept, "User requested transfer (keyword)")
+            logger.info("Twilio transfer: keyword shortcut, redirecting to %s without agent call", ext)
+            return Response(content=twiml, media_type="text/xml")
+    except Exception as e:
+        logger.warning("Twilio transfer keyword check failed: %s", e)
     
     # Call Agent LLM microservice
     try:
@@ -459,7 +607,15 @@ async def process_audio(request: Request, user_id: str = Query(...)):
         agent_response = agent_data.get("response")
         transfer_marker = agent_data.get("transfer_marker")
         transfer_context = agent_data.get("transfer_context")
+        # Accumulate full conversation for call-center (Twilio flow uses call_sid as session id)
+        _append_voice_session_history(call_sid, transcription, agent_response or "")
         if transfer_marker and transfer_context and call_sid:
+            # Attach caller phone so call-center can enrich from SuiteCRM by mobile
+            try:
+                if isinstance(transfer_context, dict) and caller_number:
+                    transfer_context.setdefault("phone", caller_number)
+            except Exception:
+                pass
             ext, _dept, _reason = _parse_transfer_marker(transfer_marker)
             _cache_transfer_context_for_call_center(ext, transfer_context, call_sid=call_sid, call_id=None)
         
@@ -467,6 +623,11 @@ async def process_audio(request: Request, user_id: str = Query(...)):
         
         if transfer_marker:
             ext, dept, reason = _parse_transfer_marker(transfer_marker)
+            # Monolith-style: create outbound call via Twilio REST (Twilio will POST to transfer_bridge when 2001 connects)
+            ok, rest_call_sid, err = _initiate_twilio_transfer_call(ext or "2001")
+            if ok:
+                logger.info("Twilio REST transfer initiated (Call SID: %s); returning TwiML for inbound", rest_call_sid)
+            # Also return TwiML so the current (inbound) call gets Dial to 2001 and connects the caller
             twiml = _build_transfer_twiml(ext, dept, reason)
             return Response(content=twiml, media_type="text/xml")
         else:
@@ -489,6 +650,58 @@ async def process_audio(request: Request, user_id: str = Query(...)):
         response.say("I'm sorry, I'm having trouble connecting to the brain. Please try again later.", voice='Polly.Amy')
         response.hangup()
         return Response(content=str(response), media_type="text/xml")
+
+
+@app.get("/twilio/voice_assistant/transfer_bridge")
+@app.get("/twilio/voice_assistant/transfer_bridge/")
+@app.post("/twilio/voice_assistant/transfer_bridge")
+@app.post("/twilio/voice_assistant/transfer_bridge/")
+async def twilio_voice_assistant_transfer_bridge(request: Request):
+    """
+    TwiML endpoint used when Twilio requests the 'Url' for an outbound call created via REST API.
+    Monolith flow: server calls Twilio REST (Calls.json) with Url=this endpoint; when the call to
+    sip:2001@... connects, Twilio POSTs here and we return Dial(Sip(2001)) TwiML.
+    """
+    if request.method == "GET":
+        ext = request.query_params.get("extension", "2001")
+        return {"status": "ok", "endpoint": "transfer_bridge", "extension": ext, "message": "Use POST for actual transfers."}
+    form_data = await request.form()
+    extension = form_data.get("extension") or request.query_params.get("extension", "2001")
+    call_sid = form_data.get("CallSid", "")
+    caller_number = form_data.get("From", "") or os.getenv("TWILIO_PHONE_NUMBER", "")
+    logger.info(
+        "transfer_bridge called: CallSid=%s From=%s extension=%s",
+        call_sid, caller_number, extension,
+    )
+
+    domain = os.getenv("FUSIONPBX_SIP_DOMAIN") or os.getenv("FREEPBX_DOMAIN", "")
+    transport = (os.getenv("FUSIONPBX_SIP_TRANSPORT") or "udp").lower()
+    timeout = int(os.getenv("TRANSFER_TIMEOUT", "30"))
+    sip_user = os.getenv("FREEPBX_SIP_USERNAME") or os.getenv("FUSIONPBX_SIP_USERNAME", "")
+    sip_pass = os.getenv("FREEPBX_SIP_PASSWORD") or os.getenv("FUSIONPBX_SIP_PASSWORD", "")
+    base_url = get_webhook_base_url()
+    callback_url = f"{base_url}/twilio/transfer_callback?extension={extension}" if base_url else None
+
+    response = VoiceResponse()
+    if not domain:
+        response.say("Transfer is not configured.", voice="Polly.Amy")
+        response.hangup()
+        return Response(content=str(response), media_type="text/xml")
+
+    sip_uri = f"sip:{extension}@{domain};transport={transport}"
+    dial_kwargs = {"answer_on_bridge": True, "timeout": timeout, "caller_id": caller_number}
+    if callback_url:
+        dial_kwargs["action"] = callback_url
+    dial = response.dial(**dial_kwargs)
+    if sip_user and sip_pass:
+        dial.sip(sip_uri, username=sip_user, password=sip_pass)
+    else:
+        dial.sip(sip_uri)
+    response.say("I'm sorry, the transfer failed. Please try again later.", voice="Polly.Amy")
+    response.hangup()
+    twiml_str = str(response)
+    logger.info("transfer_bridge returning TwiML (len=%d) Dial to %s", len(twiml_str), sip_uri)
+    return Response(content=twiml_str, media_type="text/xml")
 
 
 @app.post("/twilio/transfer_callback")

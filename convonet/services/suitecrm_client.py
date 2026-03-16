@@ -151,6 +151,37 @@ class SuiteCRMClient:
                     pass
             return {"success": False, "error": str(e)}
 
+    def get_contact_by_id(self, contact_id: str) -> Dict[str, Any]:
+        """
+        Fetch a single Contact by ID (e.g. from suitecrm_context.patient_id).
+        Returns same shape as search_patient: success, found, patient_id, attributes.
+        """
+        if not contact_id or not contact_id.strip():
+            return {"success": False, "found": False}
+        # SuiteCRM V8: GET /module/Contacts/{id}
+        endpoint = f"module/Contacts/{quote(contact_id.strip())}"
+        result = self._make_request("GET", endpoint)
+        if result.get("success") and result.get("data"):
+            data = result["data"].get("data")
+            if isinstance(data, dict):
+                attrs = data.get("attributes", {})
+                return {
+                    "success": True,
+                    "found": True,
+                    "patient_id": data.get("id", contact_id),
+                    "attributes": attrs,
+                }
+            # Sometimes API returns list
+            if isinstance(data, list) and data:
+                rec = data[0]
+                return {
+                    "success": True,
+                    "found": True,
+                    "patient_id": rec.get("id", contact_id),
+                    "attributes": rec.get("attributes", {}),
+                }
+        return {"success": result.get("success", False), "found": False}
+
     def search_patient(self, phone: str) -> Dict[str, Any]:
         """
         Search for a patient by mobile phone number in the Contacts module.

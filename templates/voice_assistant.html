@@ -161,6 +161,11 @@
                             const el = document.getElementById('response');
                             el.textContent = 'Assistant: ' + msg.text;
                             el.classList.remove('hidden');
+                            if (msg.transfer_marker) {
+                                setStatus('Transfer initiated — connecting you to the human agent (extension 2001). On a phone call you would be dialed to 2001; in this browser session the transfer is recorded for the call-center.', true);
+                                document.getElementById('status').classList.add('bg-green-100', 'text-green-800');
+                                log('Transfer initiated: ' + (msg.transfer_marker || '').slice(0, 60));
+                            }
                         }
                         if (msg.type === 'audio_chunk' && msg.data_b64) {
                             stopHoldMusic();

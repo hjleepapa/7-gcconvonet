@@ -24,6 +24,21 @@ def detect_healthcare_intent(text: str) -> bool:
     
     # Healthcare-related keywords (order matters - more specific first)
     healthcare_keywords = [
+        # Transfer to human agent (route to healthcare so transfer_to_agent is used)
+        "human agent",
+        "transfer to human",
+        "transfer to agent",
+        "speak to a human",
+        "speak to human",
+        "transfer the call",
+        "transfer this call",
+        "transfer me",
+        "connect to agent",
+        "connect to human",
+        "call to the human agent",
+        "put me through to",
+        "talk to a person",
+        "talk to human",
         # Claims
         "claim status",
         "my claim",

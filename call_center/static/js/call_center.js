@@ -1289,6 +1289,14 @@ class CallCenterAgent {
                     <span>${customer.phone || 'N/A'}</span>
                 </div>
                 <div class="customer-field">
+                    <label>Job Title:</label>
+                    <span>${customer.job_title || 'N/A'}</span>
+                </div>
+                <div class="customer-field">
+                    <label>Department:</label>
+                    <span>${customer.department || 'N/A'}</span>
+                </div>
+                <div class="customer-field">
                     <label>Account Status:</label>
                     <span>${customer.account_status || 'N/A'}</span>
                 </div>
@@ -1407,13 +1415,16 @@ class CallCenterAgent {
                     <div class="conversation-list">
             `;
             
-            // Show last 10 messages (most recent first)
-            const recentMessages = customer.conversation_history.slice(-10).reverse();
+            // Show full history (most recent first); backend sends role as "user"|"assistant"
+            const role = (msg) => (msg && (msg.role || msg.type)) || 'assistant';
+            const allMessages = customer.conversation_history;
+            const recentMessages = allMessages.length > 100 ? allMessages.slice(-100).reverse() : [...allMessages].reverse();
             
             recentMessages.forEach((msg, index) => {
-                const messageClass = msg.type === 'user' ? 'user-message' : 'assistant-message';
-                const messageIcon = msg.type === 'user' ? 'fa-user' : 'fa-robot';
-                const messageLabel = msg.type === 'user' ? 'User' : 'Assistant';
+                const r = role(msg);
+                const messageClass = r === 'user' ? 'user-message' : 'assistant-message';
+                const messageIcon = r === 'user' ? 'fa-user' : 'fa-robot';
+                const messageLabel = r === 'user' ? 'User' : 'Assistant';
                 
                 conversationHtml += `
                     <div class="conversation-item ${messageClass}">

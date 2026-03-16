@@ -3,7 +3,7 @@ import logging
 import os
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, HTTPException, Depends, Request, Query
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 import datetime
@@ -377,6 +377,75 @@ def _fetch_customer_profile_from_redis(
     return None
 
 
+def _enrich_profile_from_suitecrm(profile: Dict[str, Any], fallback_identifier: Optional[str] = None) -> None:
+    """
+    Look up SuiteCRM contact (by mobile phone) and enrich profile so call-center UI shows
+    SuiteCRM contact info (name, mobile, job title, department, email).
+    Uses CRM_INTEGRATION_URL if set (recommended so only crm-integration has SuiteCRM creds).
+    """
+    # Use only profile phone for lookup; never use extension (e.g. "2001") as phone
+    phone = profile.get("phone") or ""
+    if not phone and fallback_identifier:
+        clean_fb = "".join(c for c in str(fallback_identifier) if c.isdigit())
+        if len(clean_fb) >= 10:
+            phone = fallback_identifier
+    if not phone:
+        logger.info("SuiteCRM enrichment skipped: no phone in profile (fallback_identifier=%s)", fallback_identifier)
+        return
+    clean_phone = str(phone).replace("+", "").replace("-", "").replace(" ", "")
+    if len(clean_phone) < 10:
+        logger.info("SuiteCRM enrichment skipped: phone too short (len=%s)", len(clean_phone))
+        return
+    result = None
+    crm_url = (os.getenv("CRM_INTEGRATION_URL") or "").rstrip("/")
+    if crm_url:
+        try:
+            import requests
+            resp = requests.post(f"{crm_url}/patient/search", json={"phone": clean_phone}, timeout=10)
+            if resp.status_code == 200:
+                result = resp.json()
+                logger.info("SuiteCRM enrichment via crm-integration: phone=%s found=%s", clean_phone[:6] + "***", result.get("found"))
+            else:
+                logger.warning("CRM integration search failed: %s %s", resp.status_code, resp.text[:200])
+        except Exception as e:
+            logger.warning("CRM integration request failed: %s", e)
+    if result is None:
+        try:
+            from convonet.services.suitecrm_client import SuiteCRMClient
+            client = SuiteCRMClient()
+            result = client.search_patient(clean_phone)
+            if result:
+                logger.info("SuiteCRM enrichment via local client: found=%s", result.get("found"))
+        except Exception as e:
+            logger.warning("Local SuiteCRM lookup failed: %s", e)
+    if not result or not result.get("success") or not result.get("found"):
+        return
+    attrs = result.get("attributes", {}) or {}
+    first = attrs.get("first_name", "") or ""
+    last = attrs.get("last_name", "") or ""
+    full_name = f"{first} {last}".strip()
+    if full_name:
+        profile["name"] = full_name
+    mobile = attrs.get("phone_mobile")
+    if mobile:
+        profile["phone"] = mobile
+    email = attrs.get("email1") or attrs.get("email") or attrs.get("email_address")
+    if email:
+        profile["email"] = email
+    title = attrs.get("title")
+    if title:
+        profile["job_title"] = title
+    dept = attrs.get("department")
+    if dept:
+        profile["department"] = dept
+    if not profile.get("suitecrm_context"):
+        profile["suitecrm_context"] = {}
+    sc = profile["suitecrm_context"]
+    if result.get("patient_id"):
+        sc["patient_id"] = result["patient_id"]
+    sc["from_lookup"] = True
+
+
 @app.get("/call-center/api/customer/{customer_id}")
 async def call_center_customer(
     customer_id: str,
@@ -389,11 +458,13 @@ async def call_center_customer(
         extension=extension, call_sid=call_sid, call_id=call_id, customer_id=customer_id
     )
     if profile:
+        # Prefer SuiteCRM contact data for display (name, mobile, job title, department, email)
+        _enrich_profile_from_suitecrm(profile, fallback_identifier=customer_id)
         return profile
     return {
         "customer_id": customer_id,
         "name": "Customer",
-        "phone": "",
+        "phone": customer_id or "",
         "notes": "No context from voice assistant. Call may not be from transfer.",
         "conversation_history": [],
         "activities": [],
@@ -413,6 +484,7 @@ async def call_center_customer_data(
         extension=extension, call_sid=call_sid, call_id=call_id, customer_id=customer_id
     )
     if profile:
+        _enrich_profile_from_suitecrm(profile, fallback_identifier=customer_id)
         return {"customers": [profile], "total": 1}
     return {"customers": [], "total": 0}
 
@@ -451,6 +523,82 @@ async def get_customer_profile(phone: str):
         "last_interaction": str(datetime.datetime.now()),
         "summary": "Potential mortgage lead."
     }
+
+
+def _twilio_transfer_base_url() -> str:
+    """Base URL for Twilio webhooks (used in transfer_bridge action). Prefer voice-gateway URL so Twilio hits same host."""
+    return (
+        os.getenv("VOICE_GATEWAY_PUBLIC_URL")
+        or os.getenv("WEBHOOK_BASE_URL")
+        or os.getenv("CONVONET_API_BASE", "")
+    ).rstrip("/")
+
+
+@app.get("/twilio/voice_assistant/transfer_bridge")
+@app.get("/twilio/voice_assistant/transfer_bridge/")
+@app.post("/twilio/voice_assistant/transfer_bridge")
+@app.post("/twilio/voice_assistant/transfer_bridge/")
+async def twilio_transfer_bridge_proxy(request: Request):
+    """
+    TwiML for Twilio transfer_bridge. When the load balancer sends /twilio/voice_assistant/* to call-center
+    instead of voice-gateway, this route returns the same TwiML so Twilio gets 200 and the call continues.
+    """
+    try:
+        from twilio.twiml.voice_response import VoiceResponse
+    except ImportError:
+        logger.warning("twilio not installed in call-center; transfer_bridge will return 503")
+        return Response(content="<Response><Say>Service unavailable.</Say></Response>", media_type="text/xml", status_code=503)
+    if request.method == "GET":
+        ext = request.query_params.get("extension", "2001")
+        return {"status": "ok", "endpoint": "transfer_bridge", "extension": ext, "message": "Use POST for actual transfers."}
+    form_data = await request.form()
+    extension = form_data.get("extension") or request.query_params.get("extension", "2001")
+    call_sid = form_data.get("CallSid", "")
+    caller_number = form_data.get("From", "") or os.getenv("TWILIO_PHONE_NUMBER", "")
+    logger.info("transfer_bridge (call-center): CallSid=%s From=%s extension=%s", call_sid, caller_number, extension)
+    domain = os.getenv("FUSIONPBX_SIP_DOMAIN") or os.getenv("FREEPBX_DOMAIN", "")
+    transport = (os.getenv("FUSIONPBX_SIP_TRANSPORT") or "udp").lower()
+    timeout = int(os.getenv("TRANSFER_TIMEOUT", "30"))
+    sip_user = os.getenv("FREEPBX_SIP_USERNAME") or os.getenv("FUSIONPBX_SIP_USERNAME", "")
+    sip_pass = os.getenv("FREEPBX_SIP_PASSWORD") or os.getenv("FUSIONPBX_SIP_PASSWORD", "")
+    base_url = _twilio_transfer_base_url()
+    callback_url = f"{base_url}/twilio/transfer_callback?extension={extension}" if base_url else None
+    response = VoiceResponse()
+    if not domain:
+        response.say("Transfer is not configured.", voice="Polly.Amy")
+        response.hangup()
+        return Response(content=str(response), media_type="text/xml")
+    sip_uri = f"sip:{extension}@{domain};transport={transport}"
+    dial_kwargs = {"answer_on_bridge": True, "timeout": timeout, "caller_id": caller_number}
+    if callback_url:
+        dial_kwargs["action"] = callback_url
+    dial = response.dial(**dial_kwargs)
+    if sip_user and sip_pass:
+        dial.sip(sip_uri, username=sip_user, password=sip_pass)
+    else:
+        dial.sip(sip_uri)
+    response.say("I'm sorry, the transfer failed. Please try again later.", voice="Polly.Amy")
+    response.hangup()
+    return Response(content=str(response), media_type="text/xml")
+
+
+@app.post("/twilio/transfer_callback")
+async def twilio_transfer_callback_proxy(request: Request):
+    """TwiML callback when Dial ends. Return empty Response so call continues or ends cleanly."""
+    try:
+        from twilio.twiml.voice_response import VoiceResponse
+    except ImportError:
+        return Response(content="<Response></Response>", media_type="text/xml")
+    form_data = await request.form()
+    dial_status = form_data.get("DialCallStatus", "unknown")
+    extension = request.query_params.get("extension", "2001")
+    logger.info("transfer_callback (call-center): extension=%s DialCallStatus=%s", extension, dial_status)
+    response = VoiceResponse()
+    if dial_status != "completed":
+        response.say("The transfer could not be completed. Please try again later.", voice="Polly.Amy")
+        response.hangup()
+    return Response(content=str(response), media_type="text/xml")
+
 
 if __name__ == "__main__":
     import uvicorn

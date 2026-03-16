@@ -18,9 +18,9 @@ API keys and secrets are **not** in the repo or in the build. Set them as **envi
 
 | Service | Env vars to set |
 |--------|------------------|
-| **voice-gateway-service** | `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `REDIS_DB=0`, `DB_URI`; `AGENT_LLM_URL` (agent-llm URL); Twilio: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER`, `TWILIO_TRANSFER_CALLER_ID`, `FREEPBX_DOMAIN`. Optional STT/TTS if wired: `DEEPGRAM_API_KEY`, `ELEVENLABS_API_KEY`, `CARTESIA_API_KEY`, etc. |
+| **voice-gateway-service** | `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `REDIS_DB=0`, `DB_URI`; `AGENT_LLM_URL` (agent-llm URL); Twilio: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER`, `TWILIO_TRANSFER_CALLER_ID` (or `TWILIO_CALLER_ID`), `FREEPBX_DOMAIN` or `FUSIONPBX_SIP_DOMAIN`; **`VOICE_GATEWAY_PUBLIC_URL`** or **`WEBHOOK_BASE_URL`** = `https://v2.convonetai.com` (so Twilio can reach `/twilio/voice_assistant/transfer_bridge` when we create outbound transfer calls). Optional STT/TTS: `DEEPGRAM_API_KEY`, etc. |
 | **agent-llm-service** | `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `REDIS_DB=0`, `DB_URI`; LLM: `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_MODEL`; optional for provider checks: `DEEPGRAM_API_KEY`, `ELEVENLABS_API_KEY`, `CARTESIA_API_KEY`, `CARTESIA_*`. |
-| **call-center-service** | `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `REDIS_DB=0` (required for **Agent Monitor** to show interactions—agent-llm writes to Redis, call-center reads). `DB_URI` if you add DB. Optional: `CONVONET_API_BASE`, `VOICE_ASSISTANT_URL`, `MORTGAGE_DASHBOARD_URL` for links; `SIP_DOMAIN`, `SIP_WSS_PORT` for Call Center UI (SIP server for agents). |
+| **call-center-service** | `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `REDIS_DB=0` (required for **Agent Monitor** to show interactions—agent-llm writes to Redis, call-center reads). **`CRM_INTEGRATION_URL`** = base URL of crm-integration-service (e.g. `https://crm-integration-xxx.run.app`) so the customer popup can fetch SuiteCRM contact (name, mobile, email, job title, department) by caller phone. Without it, enrichment is skipped unless SuiteCRM env vars are set on call-center. `DB_URI` if you add DB. Optional: `CONVONET_API_BASE`, `SIP_DOMAIN`, `SIP_WSS_PORT` for Call Center UI. |
 | **crm-integration-service** | `REDIS_*` if used; SuiteCRM: `SUITECRM_BASE_URL`, `SUITECRM_CLIENT_ID`, `SUITECRM_CLIENT_SECRET`, `SUITECRM_USERNAME`, `SUITECRM_PASSWORD`. Optional: `DATABASE_URL` (MySQL for SuiteCRM). |
 
 **CONVONET_API_BASE, VOICE_ASSISTANT_URL, MORTGAGE_DASHBOARD_URL (single domain v2.convonetai.com):**  
@@ -133,6 +133,21 @@ For the Twilio/WebSocket flow, voice-gateway calls the agent-llm service. If the
 
 ---
 
+## Twilio voice webhook URL (v2.convonetai.com)
+
+On GCP, path-based routing sends **`/twilio/*`** to **voice-gateway-service** and **`/convonet_todo/*`** to **agent-llm-service**. Twilio webhook handlers live only on **voice-gateway-service** at **`/twilio/call`**, **`/twilio/verify_pin`**, **`/twilio/process_audio`**, **`/twilio/transfer_callback`**.
+
+**Correct Twilio configuration (A call comes in):**
+
+| Setting | Value |
+|--------|--------|
+| **Webhook URL** | `https://v2.convonetai.com/twilio/call` |
+| **HTTP** | POST |
+
+**Incorrect:** `https://v2.convonetai.com/convonet_todo/twilio` is routed to **agent-llm-service**, which has no `/twilio` route, so Twilio gets 404 and you see no request in voice-gateway logs. Use **`/twilio/call`** (no `convonet_todo` prefix).
+
+---
+
 ## Twilio transfer to FusionPBX (voice-gateway-service)
 
 When a user on a **Twilio voice call** says “transfer me to an agent,” the agent returns a transfer marker and the voice-gateway returns TwiML that Dials the SIP endpoint (e.g. `2001@FusionPBX`). Set these on **voice-gateway-service**:
@@ -140,13 +155,15 @@ When a user on a **Twilio voice call** says “transfer me to an agent,” the a
 | Variable | Purpose |
 |----------|---------|
 | `VOICE_GATEWAY_PUBLIC_URL` or `WEBHOOK_BASE_URL` | Base URL Twilio uses for webhooks (e.g. `https://voice-gateway-service-xxx.run.app` or `https://v2.convonetai.com`). Used for the transfer callback URL. |
-| `FREEPBX_DOMAIN` or `FUSIONPBX_SIP_DOMAIN` | FusionPBX host (IP or FQDN) for SIP, e.g. `pbx.example.com` or `136.115.41.45`. |
+| `FREEPBX_DOMAIN` or `FUSIONPBX_SIP_DOMAIN` | FusionPBX host for SIP. Use IP (e.g. `136.115.41.45`) or hostname (e.g. `pbx.hjlees.com` if the call-center UI uses it and extensions are registered under that domain). Twilio will call `sip:2001@<this_value>`. |
 | `FUSIONPBX_SIP_TRANSPORT` | Optional; `udp` (default) or `tcp`. |
 | `TRANSFER_TIMEOUT` | Optional; seconds to wait for the agent to answer (default `30`). |
 | `TWILIO_TRANSFER_CALLER_ID` or `TWILIO_PHONE_NUMBER` | Caller ID presented to FusionPBX when dialing the extension. |
 | `FREEPBX_SIP_USERNAME` / `FREEPBX_SIP_PASSWORD` | Optional; SIP auth if FusionPBX requires it (otherwise whitelist Twilio IPs). |
 
 Flow: `/twilio/process_audio` receives the agent response with `transfer_marker` → parses `TRANSFER_INITIATED:extension|department|reason` → returns TwiML with `<Dial><Sip>sip:extension@domain</Sip></Dial>`. When the Dial ends, Twilio POSTs to `{VOICE_GATEWAY_PUBLIC_URL}/twilio/transfer_callback?extension=...` (if base URL is set).
+
+**REST API transfer (same as monolith):** On transfer (WebSocket or Twilio), voice-gateway also calls **Twilio REST API** to create an outbound call to `sip:2001@domain` with `Url={VOICE_GATEWAY_PUBLIC_URL}/twilio/voice_assistant/transfer_bridge?extension=2001`. When that call connects, Twilio POSTs to **transfer_bridge** (so you see Calls.json + transfer_bridge in Twilio logs). Set **`VOICE_GATEWAY_PUBLIC_URL`** (or **`WEBHOOK_BASE_URL`**) to `https://v2.convonetai.com` so Twilio can reach transfer_bridge. See `docs/TRANSFER_MONOLITH_VS_GCP.md`.
 
 ---
 
@@ -162,9 +179,15 @@ No code changes are required; the app already reads these from the environment.
 
 ---
 
-## Artifact Registry: automatic removal of old container images
+## Artifact Registry & Cloud Run: automatic removal of old images and revisions
 
-After each full deploy (`gcloud builds submit --config cloudbuild.yaml .`), **Cloud Build runs a cleanup step** that removes old container image tags for all four services. For each package (`voice-gateway-service`, `agent-llm-service`, `call-center-service`, `crm-integration-service`), it keeps only the tag you just deployed (e.g. `latest` or `$_COMMIT_SHA`) and deletes any other tags. That prevents old tags from accumulating when you use unique tags per build.
+After each full deploy (`gcloud builds submit --config cloudbuild.yaml .`), **Cloud Build runs two cleanup steps**:
+
+1. **Old container image tags (Artifact Registry)**  
+   For each package (`voice-gateway-service`, `agent-llm-service`, `call-center-service`, `crm-integration-service`), the build keeps only the tag you just deployed (e.g. `latest` or `$_COMMIT_SHA`) and deletes any other tags. That prevents old tags from accumulating when you use unique tags per build.
+
+2. **Old Cloud Run revisions**  
+   For each of the four services, the build lists revisions (newest first), **keeps the latest revision** (the one just deployed), and **deletes all older revisions**. So you only see one revision per service in the Cloud Run console after each deploy.
 
 **Optional: remove untagged images**  
 When you always push the same tag (e.g. `latest`), the previous digest becomes untagged. To have GCP automatically delete those, set a **cleanup policy** on the repository once: **Console** → Artifact Registry → **convonet-repo** → **Cleanup policies** → Add policy → “Keep most recent versions” → set **1** → Save. You can also use `gcloud artifacts repositories set-cleanup-policies` with a JSON policy file (see [Cleanup policy overview](https://cloud.google.com/artifact-registry/docs/repositories/cleanup-policy-overview)).

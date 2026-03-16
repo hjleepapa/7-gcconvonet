@@ -893,20 +893,18 @@
                             <h4 class="font-semibold text-gray-800 mb-3">Convonet Project Structure</h4>
                             <div class="font-mono text-sm overflow-x-auto">
                                 <pre>Project Root/
-├── app.py                          # Main Flask application
-├── app_memory_optimized.py         # Memory-optimized Flask application
-├── passenger_wsgi.py               # WSGI entry point for main app
-├── passenger_wsgi_memory_optimized.py  # WSGI entry for memory-optimized app
-├── extensions.py                   # Flask extensions (db, login, migrate, etc.)
+├── app.py                          # Legacy Flask application (optional)
+├── passenger_wsgi.py               # Legacy WSGI entry (optional)
+├── asgi_main.py                    # Legacy FastAPI+Flask hybrid (optional)
+├── extensions.py                   # Flask extensions (for legacy app)
 ├── requirements.txt                # Python dependencies
-├── requirements_memory_optimized.txt  # Memory-optimized dependencies
-├── Procfile                        # Render.com process file
-├── render.yaml                     # Render.com deployment config
-├── render_memory_optimized.yaml    # Memory-optimized deployment config
-├── render-build.sh                 # Build script for Render.com
-├── deepgram_service.py             # Deepgram STT service (root level)
-├── deepgram_webrtc_integration.py  # WebRTC Deepgram integration (root level)
-├── templates/                      # Flask templates
+├── cloudbuild.yaml                 # GCP Cloud Build (primary deploy)
+├── docker/                         # Per-service Dockerfiles for GCP
+│   ├── voice-gateway.Dockerfile
+│   ├── agent-llm.Dockerfile
+│   ├── call-center.Dockerfile
+│   └── crm-integration.Dockerfile
+├── templates/                      # Shared templates
 │   ├── team_dashboard.html         # Team management UI
 │   ├── register.html               # User registration
 │   ├── convonet_tech_spec.html     # Technical documentation
@@ -921,10 +919,14 @@
 │   └── schemas.py                  # Shared data schemas
 └── convonet/                       # Convonet module
     ├── __init__.py                 # Package initialization
-    ├── routes.py                   # Flask routes & Twilio webhooks (Sentry integrated)
+    ├── routes.py                   # Agent logic (used by agent-llm-service)
+    ├── voice_gateway_service.py    # FastAPI voice + Twilio (GCP)
+    ├── agent_llm_service.py       # FastAPI agent LLM (GCP)
+    ├── call_center_service.py      # FastAPI call center UI (GCP)
+    ├── crm_integration_service.py  # FastAPI SuiteCRM (GCP)
     ├── assistant_graph_todo.py     # LangGraph agent (optimized timeouts)
     ├── state.py                    # Agent state management
-    ├── webrtc_voice_server.py      # WebRTC voice assistant server
+    ├── webrtc_voice_server_socketio.py  # Legacy Socket.IO voice server
     ├── audio_player_routes.py      # Audio stream player routes
     ├── redis_manager.py            # Redis session & audio buffer management
     ├── composio_tools.py           # Composio tool integration

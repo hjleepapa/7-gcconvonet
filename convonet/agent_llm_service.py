@@ -37,6 +37,8 @@ class TransferContext(BaseModel):
     conversation_history: List[Dict[str, str]] = []  # [{"role": "user"|"assistant", "content": "..."}]
     user_id: Optional[str] = None
     user_name: Optional[str] = None
+    activities: Optional[List[Dict[str, Any]]] = None  # Tool-call summary (SuiteCRM, mortgage, todo)
+    suitecrm_context: Optional[Dict[str, Any]] = None  # patient_id, meeting_id, case_id, note_id
 
 
 class AgentResponse(BaseModel):

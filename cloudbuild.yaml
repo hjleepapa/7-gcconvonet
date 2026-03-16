@@ -95,7 +95,34 @@ steps:
             fi
           done
         done
-        echo "Cleanup complete."
+        echo "Image cleanup complete."
+    waitFor: ['deploy-voice-gateway', 'deploy-agent-llm', 'deploy-call-center', 'deploy-crm-integration']
+
+  # 5. Remove old Cloud Run revisions (keep only the latest per service)
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: cleanup-old-revisions
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        set -e
+        REGION="us-central1"
+        for svc in voice-gateway-service agent-llm-service call-center-service crm-integration-service; do
+          echo "Cleaning old revisions for $$svc (keeping latest)"
+          REVS=$$(gcloud run revisions list --service="$$svc" --region="$$REGION" --format="value(metadata.name)" --sort-by=~metadata.creationTimestamp 2>/dev/null || true)
+          first=1
+          for rev in $$REVS; do
+            if [ -z "$$rev" ]; then continue; fi
+            if [ $$first -eq 1 ]; then
+              first=0
+              echo "  Keeping latest revision: $$rev"
+              continue
+            fi
+            echo "  Deleting revision: $$rev"
+            gcloud run revisions delete "$$rev" --region="$$REGION" --quiet 2>/dev/null || true
+          done
+        done
+        echo "Revision cleanup complete."
     waitFor: ['deploy-voice-gateway', 'deploy-agent-llm', 'deploy-call-center', 'deploy-crm-integration']
 
 images:

@@ -41,7 +41,7 @@ With this setup, **no cross-origin env vars** are needed on call-center-service:
 |------|------|
 | `convonet/voice_gateway_service.py` | FastAPI app: health, WebSocket `/webrtc/ws`, message handling. |
 | `convonet/schemas.py` | Pydantic models for client↔server WebSocket messages (plan §10.2). |
-| `convonet/fastapi_voice_gateway.py` | Alternative router with `/voice-stream` (binary WebSocket); used by hybrid `asgi_main` only. |
+| *(removed)* | Old `fastapi_voice_gateway.py` was removed; voice is handled by `convonet/voice_gateway_service.py`. |
 
 **Key functions in `voice_gateway_service.py`:**
 

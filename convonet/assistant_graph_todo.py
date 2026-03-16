@@ -91,7 +91,7 @@ class TodoAgent:
             - "create [priority] todo for [team]" → use create_team_todo immediately
             
             CALL TRANSFER (VOICE CALLS ONLY):
-            - "transfer me" / "speak to agent" / "talk to human" → use transfer_to_agent immediately
+            - "transfer me" / "speak to agent" / "talk to human" / "human agent" / "call to the human agent" / "transfer this call" → use transfer_to_agent(department="support", reason="User requested transfer to human agent") immediately. Do NOT use get_teams or get_team_members for this—use transfer_to_agent.
             - "transfer to [department]" → use transfer_to_agent with department parameter
             - "what departments" / "who can I talk to" → use get_available_departments immediately
             

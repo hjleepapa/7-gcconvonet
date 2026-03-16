@@ -52,6 +52,39 @@ _mcp_tools_lock = None  # Lazy initialized to avoid loop conflicts
 CALL_CENTER_MAX_CONVERSATION_MESSAGES = 50
 
 
+def _is_transfer_only_request(prompt: str) -> bool:
+    """True if the prompt is only asking to transfer to a human agent (no other intent). Used for fast path."""
+    if not prompt or not isinstance(prompt, str):
+        return False
+    text = prompt.strip().lower()
+    if len(text) > 150:  # Long messages might mention transfer but have other intent
+        return False
+    transfer_phrases = [
+        "human agent",
+        "transfer this call",
+        "transfer to human",
+        "transfer to agent",
+        "transfer me",
+        "speak to a human",
+        "speak to human",
+        "connect to agent",
+        "connect to human",
+        "transfer the call",
+        "this call to the human agent",
+        "call to the human agent",
+        "or to the human agent",
+        "just for this call to the human agent",
+        "please call to the human agent",
+        "transport to the",
+        "transport this call",
+        "to the support department",
+        "transfer to the support",
+        "yes. transport",
+        "this call to the human of human agent",  # STT variant
+    ]
+    return any(p in text for p in transfer_phrases)
+
+
 def _extract_transfer_marker_from_message(msg):
     """Extract TRANSFER_INITIATED:... from a message's content (str or list). Returns the marker string or None."""
     if not hasattr(msg, "content"):
@@ -87,6 +120,66 @@ def _messages_to_conversation_history(messages, append_assistant_content=None):
     if append_assistant_content:
         history.append({"role": "assistant", "content": append_assistant_content})
     return history[-CALL_CENTER_MAX_CONVERSATION_MESSAGES:] if len(history) > CALL_CENTER_MAX_CONVERSATION_MESSAGES else history
+
+
+def _tool_calls_to_activities_and_suitecrm(tool_calls_info):
+    """Build activities list and suitecrm_context dict from tool call results for call-center UI."""
+    activities = []
+    suitecrm_context = {}
+    for tc in (tool_calls_info or []):
+        tool_name = getattr(tc, "tool_name", None) or (tc.get("tool_name") if isinstance(tc, dict) else None)
+        result = getattr(tc, "result", None) or (tc.get("result") if isinstance(tc, dict) else None)
+        if not tool_name:
+            continue
+        tool_content = result
+        if isinstance(tool_content, str) and tool_content.strip().startswith("{"):
+            try:
+                tool_content = json.loads(tool_content)
+            except Exception:
+                tool_content = {}
+        if not isinstance(tool_content, dict):
+            tool_content = {}
+        # Activity entry for display
+        activity = {"type": "tool", "title": tool_name.replace("_", " ").title(), "raw": str(result)[:200]}
+        # Mortgage
+        if "mortgage" in (tool_name or "").lower() or "application" in (tool_name or "").lower():
+            if tool_content.get("application_id"):
+                activity["title"] = f"Mortgage Application {str(tool_content.get('application_id', ''))[:8]}"
+            activities.append(activity)
+        # SuiteCRM / healthcare
+        elif any(x in (tool_name or "").lower() for x in ["patient", "appointment", "clinical", "call_summary", "suitecrm", "onboard", "book_appointment", "check_patient"]):
+            activity["activity_type"] = "suitecrm"
+            if tool_content.get("patient_id"):
+                activity["patient_id"] = tool_content["patient_id"]
+                suitecrm_context["patient_id"] = tool_content["patient_id"]
+            if tool_content.get("meeting_id"):
+                activity["meeting_id"] = tool_content["meeting_id"]
+                activity["title"] = "Appointment booked"
+                suitecrm_context["meeting_id"] = tool_content["meeting_id"]
+            if tool_content.get("case_id"):
+                activity["case_id"] = tool_content["case_id"]
+                activity["title"] = activity.get("title") or "Case created"
+                suitecrm_context["case_id"] = tool_content["case_id"]
+            if tool_content.get("note_id"):
+                activity["note_id"] = tool_content["note_id"]
+                suitecrm_context["note_id"] = tool_content["note_id"]
+            if tool_content.get("found"):
+                activity["title"] = "Patient found in system"
+            elif tool_content.get("success") and "onboard" in (tool_name or "").lower():
+                activity["title"] = "New patient registered"
+            activities.append(activity)
+        # Todo / calendar
+        elif any(x in (tool_name or "").lower() for x in ["todo", "reminder", "calendar", "meeting"]):
+            activity["type"] = "todo"
+            activity["action"] = "created"
+            if tool_content.get("title"):
+                activity["title"] = tool_content["title"]
+            if tool_content.get("due_date"):
+                activity["due_date"] = tool_content["due_date"]
+            activities.append(activity)
+        else:
+            activities.append(activity)
+    return activities[-10:], suitecrm_context  # Last 10 activities
 
 
 convonet_todo_bp = Blueprint(
@@ -1600,14 +1693,15 @@ async def _get_agent_graph(
             
             else:
                 # Filter to exclude domain-specific tools (keep todo/team/calendar/transfer + shared tools)
-                shared_tool_names = ["web_search"]  # Available to all agents
+                # Include transfer_to_agent so todo agent can transfer to 2001@FusionPBX when user says "human agent"
+                shared_tool_names = ["web_search", "transfer_to_agent", "get_available_departments"]
                 all_domain_tools = mortgage_tool_names + healthcare_tool_names
                 filtered_tools = [
                     t for t in tools
                     if (_get_tool_name(t) in shared_tool_names) or (_get_tool_name(t) not in all_domain_tools)
                 ]
                 tools = filtered_tools
-                print(f"📝 Filtered to {len(tools)} todo/team tools (excluded domain-specific, kept shared)", flush=True)
+                print(f"📝 Filtered to {len(tools)} todo/team tools (excluded domain-specific, kept shared + transfer)", flush=True)
             
             print(f"🔧 Building {agent_type} agent graph with {len(tools)} tools...", flush=True)
             sys.stdout.flush()
@@ -1784,6 +1878,35 @@ async def _run_agent_async(
         user_name: User's display name
         reset_thread: If True, starts a new conversation thread (used after timeouts/errors)
     """
+    # Transfer-only shortcut: if user is only asking to transfer to human agent, return immediately (avoids timeout and wrong tools)
+    if _is_transfer_only_request(prompt):
+        ext = os.getenv("VOICE_AGENT_FALLBACK_EXTENSION", "2001")
+        dept = os.getenv("VOICE_AGENT_FALLBACK_DEPARTMENT", "support")
+        marker = f"TRANSFER_INITIATED:{ext}|{dept}|User requested transfer to human agent"
+        msg = "I'll connect you to a human agent now."
+        print(f"🔄 Transfer-only shortcut: returning immediately (extension={ext})", flush=True)
+        if include_metadata:
+            ctx = None
+            if user_id or user_name:
+                ctx = {
+                    "conversation_history": [
+                        {"role": "user", "content": prompt},
+                        {"role": "assistant", "content": msg},
+                    ],
+                    "user_id": user_id,
+                    "user_name": user_name,
+                    "activities": [],
+                    "suitecrm_context": {},
+                }
+            return {
+                "response": msg,
+                "transfer_marker": marker,
+                "transfer_context": ctx,
+                "provider_used": None,
+                "model_used": None,
+            }
+        return marker
+
     # Import agent monitor for tracking
     from .agent_monitor import get_agent_monitor, AgentInteractionStatus, ToolCallInfo
     
@@ -2093,9 +2216,21 @@ async def _run_agent_async(
                         gemini_api_key = os.getenv("GOOGLE_API_KEY")
                         gemini_model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
                         
-                        # Get tools from MCP cache (same tools used to build agent graph)
-                        tools = _mcp_tools_cache if _mcp_tools_cache is not None else []
-                        print(f"🔧 Got {len(tools)} tools from MCP cache for Gemini streaming", flush=True)
+                        # Get tools from MCP cache and ensure transfer_to_agent is included (not in MCP config)
+                        tools = (_mcp_tools_cache.copy() if _mcp_tools_cache else [])
+                        try:
+                            from .mcps.local_servers.call_transfer import get_transfer_tools
+                            transfer_tools = get_transfer_tools()
+                            existing = {t.name for t in tools}
+                            for t in transfer_tools:
+                                if t.name not in existing:
+                                    tools.append(t)
+                                    existing.add(t.name)
+                            print(f"🔧 Gemini tools: {len(tools)} total (MCP + transfer_to_agent, get_available_departments)", flush=True)
+                        except Exception as e:
+                            print(f"⚠️ Could not add transfer tools for Gemini: {e}", flush=True)
+                        if not any(getattr(t, 'name', None) == 'transfer_to_agent' for t in tools):
+                            print(f"⚠️ transfer_to_agent not in Gemini tools list - transfer to 2001@FusionPBX will not work", flush=True)
                         sys.stdout.flush()
                         
                         # Get system prompt - use a simplified version for Gemini native SDK (all agent types)
@@ -2168,12 +2303,15 @@ VOICE OUTPUT FORMAT (CRITICAL):
                                     transfer_marker = res if isinstance(res, str) else str(res)
                                     print(f"🔄 Transfer marker from Gemini tool result: {transfer_marker[:80]}...", flush=True)
                                     break
-                        # Build transfer context for call-center UI (conversation history)
+                        # Build transfer context for call-center UI (conversation history + CRM/tool summary)
                         if transfer_marker and conversation_messages is not None:
+                            acts, suitecrm = _tool_calls_to_activities_and_suitecrm(tool_calls_info)
                             transfer_context = {
                                 "conversation_history": _messages_to_conversation_history(conversation_messages, final_response),
                                 "user_id": user_id,
                                 "user_name": user_name or None,
+                                "activities": acts,
+                                "suitecrm_context": suitecrm,
                             }
                         
                         print(f"✅ Gemini native streaming completed", flush=True)
@@ -2475,10 +2613,13 @@ VOICE OUTPUT FORMAT (CRITICAL):
                                 final_response = ""
                             # Build transfer context for call-center UI when transfer was requested
                             if transfer_marker and include_metadata and final_messages:
+                                acts, suitecrm = _tool_calls_to_activities_and_suitecrm(tool_calls_info)
                                 transfer_context = {
                                     "conversation_history": _messages_to_conversation_history(final_messages),
                                     "user_id": user_id,
                                     "user_name": user_name or None,
+                                    "activities": acts,
+                                    "suitecrm_context": suitecrm,
                                 }
                             # Clear state reference after extracting needed data
                             final_state = None
