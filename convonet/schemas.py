@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Literal
 from pydantic import BaseModel, Field
 
 # --- Client to Server Messages ---
@@ -9,6 +9,13 @@ class ClientMessageType(str, Enum):
     START_RECORDING = "start_recording"
     AUDIO_CHUNK = "audio_chunk"
     STOP_RECORDING = "stop_recording"
+    # Streaming STT protocol (Phase 1+)
+    AUDIO_FRAME = "audio_frame"
+    END_UTTERANCE = "end_utterance"
+    STREAM_RESET = "stream_reset"
+    # Barge-in / cancel current turn
+    CANCEL = "cancel"
+    VOICE_PROVIDERS = "voice_providers"
     TRANSFER_REQUEST = "transfer_request"
     HEARTBEAT = "heartbeat"
 
@@ -17,12 +24,16 @@ class AuthMessage(BaseModel):
     session_id: Optional[str] = None
     pin: Optional[str] = None
     user_token: Optional[str] = None
+    stt_provider: Optional[str] = None
+    tts_provider: Optional[str] = None
 
 class StartRecordingMessage(BaseModel):
     type: ClientMessageType = Field(ClientMessageType.START_RECORDING, Literal=True)
     session_id: str
-    stt_mode: str = "streaming"
+    stt_mode: str = "batch"  # "batch" = audio_chunk + stop_recording; "streaming" = audio_frame + end_utterance
     language: str = "en-US"
+    stt_provider: Optional[str] = None
+    tts_provider: Optional[str] = None
 
 class AudioChunkMessage(BaseModel):
     type: ClientMessageType = Field(ClientMessageType.AUDIO_CHUNK, Literal=True)
@@ -34,6 +45,41 @@ class AudioChunkMessage(BaseModel):
 class StopRecordingMessage(BaseModel):
     type: ClientMessageType = Field(ClientMessageType.STOP_RECORDING, Literal=True)
     session_id: str
+
+
+class AudioFrameMessage(BaseModel):
+    """Streaming: small audio chunk (e.g. 20–50 ms). Server buffers until end_utterance."""
+    type: ClientMessageType = Field(ClientMessageType.AUDIO_FRAME, Literal=True)
+    session_id: str
+    sequence: int = 0
+    data_b64: str
+
+
+class EndUtteranceMessage(BaseModel):
+    """Streaming: client signals end of current utterance; server runs STT on buffered frames then LLM+TTS."""
+    type: ClientMessageType = Field(ClientMessageType.END_UTTERANCE, Literal=True)
+    session_id: str
+
+
+class StreamResetMessage(BaseModel):
+    """Streaming: discard buffered frames and reset for next utterance."""
+    type: ClientMessageType = Field(ClientMessageType.STREAM_RESET, Literal=True)
+    session_id: str
+
+
+class CancelMessage(BaseModel):
+    """Barge-in: client requests that the server skip sending transcript/agent/tts for the in-flight turn."""
+    type: ClientMessageType = Field(ClientMessageType.CANCEL, Literal=True)
+    session_id: str
+
+
+class VoiceProvidersMessage(BaseModel):
+    """Update per-session STT/TTS provider without re-running full start_recording."""
+    type: ClientMessageType = Field(ClientMessageType.VOICE_PROVIDERS, Literal=True)
+    session_id: str
+    stt_provider: Optional[str] = None
+    tts_provider: Optional[str] = None
+
 
 class TransferRequestMessage(BaseModel):
     type: ClientMessageType = Field(ClientMessageType.TRANSFER_REQUEST, Literal=True)
@@ -75,6 +121,7 @@ class GreetingMessage(BaseModel):
     session_id: str
     text: str
     data_b64: str  # TTS audio (e.g. audio/mpeg or audio/wav)
+    mime_type: str = "audio/mpeg"  # audio/wav for Cartesia REST (PCM wrapped as WAV)
 
 class ProcessingStartMessage(BaseModel):
     type: ServerMessageType = Field(ServerMessageType.PROCESSING_START, Literal=True)
@@ -118,6 +165,7 @@ class AudioChunkOutMessage(BaseModel):
     data_b64: str
     is_final: bool = False
     is_early: bool = False
+    mime_type: str = "audio/mpeg"
 
 class TransferInitiatedMessage(BaseModel):
     type: ServerMessageType = Field(ServerMessageType.TRANSFER_INITIATED, Literal=True)

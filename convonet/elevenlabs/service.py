@@ -465,7 +465,10 @@ class ElevenLabsService:
                 
                 transcription = self.client.speech_to_text.convert(
                     file=audio_file,
-                    model_id="scribev1" # Use Scribe v1
+                    # Updated per ElevenLabs API: valid options are
+                    # 'scribe_v1', 'scribe_v1_experimental', 'scribe_v2'.
+                    # Default to scribe_v1 for stability.
+                    model_id="scribe_v1"
                 )
                 
                 text = transcription.text

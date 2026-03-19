@@ -18,12 +18,36 @@
                 <input type="password" id="pinInput" placeholder="PIN" class="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm" maxlength="20" autocomplete="off">
                 <button type="button" id="btnLogin" class="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700">Login</button>
             </div>
+            <p class="text-xs text-gray-600 mt-2 mb-1">STT / TTS (choose before Login so greeting and speech use your engine):</p>
+            <div class="flex flex-wrap gap-2 text-xs text-gray-700">
+                <label class="flex items-center gap-1">
+                    STT:
+                    <select id="sttProviderSelect" class="border border-gray-300 rounded px-1 py-0.5">
+                        <option value="">Server default</option>
+                        <option value="deepgram">Deepgram</option>
+                        <option value="elevenlabs">ElevenLabs</option>
+                        <option value="cartesia">Cartesia</option>
+                        <option value="speechmatics">Speechmatics</option>
+                    </select>
+                </label>
+                <label class="flex items-center gap-1">
+                    TTS:
+                    <select id="ttsProviderSelect" class="border border-gray-300 rounded px-1 py-0.5">
+                        <option value="">Server default</option>
+                        <option value="deepgram">Deepgram</option>
+                        <option value="elevenlabs">ElevenLabs</option>
+                        <option value="cartesia">Cartesia</option>
+                    </select>
+                </label>
+            </div>
             <p id="authError" class="mt-2 text-sm text-red-600 hidden"></p>
         </div>
         <div id="readySection" class="hidden mb-4">
-            <div class="flex gap-3 justify-center">
-                <button id="btnStart" disabled class="px-6 py-3 rounded-lg bg-orange-500 text-white font-semibold disabled:opacity-50 disabled:cursor-not-allowed">Start</button>
-                <button id="btnStop" disabled class="px-6 py-3 rounded-lg bg-gray-600 text-white font-semibold disabled:opacity-50 disabled:cursor-not-allowed">Stop</button>
+            <div class="flex flex-col items-center gap-3">
+                <button id="btnTalk" disabled class="w-20 h-20 rounded-full bg-orange-500 text-white text-2xl flex items-center justify-center shadow-lg disabled:opacity-50 disabled:cursor-not-allowed">
+                    <i class="fas fa-microphone"></i>
+                </button>
+                <p id="talkHint" class="text-xs text-gray-600">Click to talk, click again to send.</p>
             </div>
         </div>
         <div id="transcript" class="mb-2 p-2 rounded bg-blue-50 text-sm text-gray-700 hidden"></div>
@@ -50,6 +74,7 @@
             let processingTimerId = null;
             let holdMusicCtx = null;
             let holdMusicOsc = null;
+            let isRecording = false;
 
             function log(msg) {
                 const el = document.getElementById('log');
@@ -137,11 +162,11 @@
                         if (msg.type === 'auth_ok') {
                             document.getElementById('authSection').classList.add('hidden');
                             document.getElementById('readySection').classList.remove('hidden');
-                            setStatus('Ready. Click Start, speak, then Stop.', true);
-                            document.getElementById('btnStart').disabled = false;
+                            setStatus('Ready. Click the mic to talk.', true);
+                            document.getElementById('btnTalk').disabled = false;
                         }
                         if (msg.type === 'greeting' && msg.data_b64) {
-                            playAudioFromBase64(msg.data_b64);
+                            playAudioFromBase64(msg.data_b64, msg.mime_type);
                             setStatus('Playing greeting…', true);
                         }
                         if (msg.type === 'status') {
@@ -169,7 +194,7 @@
                         }
                         if (msg.type === 'audio_chunk' && msg.data_b64) {
                             stopHoldMusic();
-                            playAudioFromBase64(msg.data_b64);
+                            playAudioFromBase64(msg.data_b64, msg.mime_type);
                             setStatus('Playing response…', true);
                         }
                         if (msg.type === 'error') {
@@ -186,8 +211,8 @@
                 };
                 ws.onclose = function () {
                     setStatus('Disconnected.', false);
-                    document.getElementById('btnStart').disabled = true;
-                    document.getElementById('btnStop').disabled = true;
+                    const talkBtn = document.getElementById('btnTalk');
+                    if (talkBtn) talkBtn.disabled = true;
                     log('Closed');
                 };
                 ws.onerror = function () { log('WebSocket error'); };
@@ -197,25 +222,47 @@
                 if (!ws || ws.readyState !== WebSocket.OPEN) return;
                 var pin = (document.getElementById('pinInput').value || '').trim();
                 document.getElementById('authError').classList.add('hidden');
-                ws.send(JSON.stringify({ type: 'authenticate', session_id: sessionId, pin: pin }));
-                log('Sent authenticate (PIN ' + (pin ? '***' : 'empty') + ')');
+                const prov = getSelectedProviders();
+                const authPayload = { type: 'authenticate', session_id: sessionId, pin: pin };
+                if (prov.stt_provider) authPayload.stt_provider = prov.stt_provider;
+                if (prov.tts_provider) authPayload.tts_provider = prov.tts_provider;
+                ws.send(JSON.stringify(authPayload));
+                log('Sent authenticate' + (prov.stt_provider || prov.tts_provider ? ' with STT/TTS' : '') + ' (PIN ' + (pin ? '***' : 'empty') + ')');
             }
             document.getElementById('btnLogin').onclick = doLogin;
             document.getElementById('pinInput').onkeydown = function (e) {
                 if (e.key === 'Enter') { e.preventDefault(); doLogin(); }
             };
 
-            document.getElementById('btnStart').onclick = function () {
+            function getSelectedProviders() {
+                const sttSel = document.getElementById('sttProviderSelect');
+                const ttsSel = document.getElementById('ttsProviderSelect');
+                return {
+                    stt_provider: sttSel && sttSel.value || undefined,
+                    tts_provider: ttsSel && ttsSel.value || undefined
+                };
+            }
+
+            function beginRecording() {
                 if (!ws || ws.readyState !== WebSocket.OPEN) return;
+                if (isRecording) return;
                 if (currentResponseAudio) {
                     try { currentResponseAudio.pause(); currentResponseAudio.currentTime = 0; } catch (e) {}
                     currentResponseAudio = null;
                     log('Barge-in: stopped playback');
                 }
                 stopHoldMusic();
-                ws.send(JSON.stringify({ type: 'start_recording', session_id: sessionId, stt_mode: 'streaming', language: 'en-US' }));
-                log('Sent start_recording');
-                document.getElementById('btnStop').disabled = false;
+                const providers = getSelectedProviders();
+                const msg = {
+                    type: 'start_recording',
+                    session_id: sessionId,
+                    stt_mode: 'streaming',
+                    language: 'en-US'
+                };
+                if (providers.stt_provider) msg.stt_provider = providers.stt_provider;
+                if (providers.tts_provider) msg.tts_provider = providers.tts_provider;
+                ws.send(JSON.stringify(msg));
+                log('Sent start_recording' + (providers.stt_provider || providers.tts_provider ? ' with providers' : ''));
                 audioChunks = [];
                 navigator.mediaDevices.getUserMedia({ audio: true }).then(function (s) {
                     stream = s;
@@ -224,22 +271,26 @@
                         if (e.data.size > 0) audioChunks.push(e.data);
                     };
                     mediaRecorder.start(250);
+                    isRecording = true;
+                    document.getElementById('talkHint').textContent = 'Recording… click again to send.';
                     setStatus('Recording… speak now.', true);
                 }).catch(function (e) {
                     log('Mic error: ' + e.message);
                     setStatus('Microphone access denied.', false);
                 });
-            };
+            }
 
-            document.getElementById('btnStop').onclick = function () {
+            function endRecording() {
                 if (!ws || ws.readyState !== WebSocket.OPEN) return;
-                document.getElementById('btnStop').disabled = true;
+                if (!isRecording) return;
+                isRecording = false;
                 if (mediaRecorder && mediaRecorder.state !== 'inactive') {
                     mediaRecorder.onstop = function () {
                         if (stream) stream.getTracks().forEach(function (t) { t.stop(); });
                         if (audioChunks.length === 0) {
                             ws.send(JSON.stringify({ type: 'stop_recording', session_id: sessionId }));
                             log('No audio; sent stop_recording');
+                            document.getElementById('talkHint').textContent = 'Click to talk, click again to send.';
                             return;
                         }
                         const blob = new Blob(audioChunks, { type: 'audio/webm' });
@@ -263,6 +314,7 @@
                             ws.send(JSON.stringify({ type: 'stop_recording', session_id: sessionId }));
                             log('Sent full recording + stop_recording');
                             setStatus('Processing…', true);
+                            document.getElementById('talkHint').textContent = 'Click to talk, click again to send.';
                         };
                         reader.readAsArrayBuffer(blob);
                     };
@@ -270,6 +322,17 @@
                 } else {
                     ws.send(JSON.stringify({ type: 'stop_recording', session_id: sessionId }));
                     log('Sent stop_recording');
+                    document.getElementById('talkHint').textContent = 'Click to talk, click again to send.';
+                }
+            }
+
+            const talkBtn = document.getElementById('btnTalk');
+            talkBtn.onclick = function () {
+                if (!ws || ws.readyState !== WebSocket.OPEN) return;
+                if (!isRecording) {
+                    beginRecording();
+                } else {
+                    endRecording();
                 }
             };
 

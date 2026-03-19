@@ -263,7 +263,14 @@ class CartesiaService:
             import traceback
             traceback.print_exc()
 
-    def synthesize_rest_api(self, text: str, voice_id: Optional[str] = None, sample_rate: int = 48000) -> Optional[bytes]:
+    def synthesize_rest_api(
+        self,
+        text: str,
+        voice_id: Optional[str] = None,
+        sample_rate: int = 48000,
+        *,
+        wrap_wav_for_browser: bool = False,
+    ) -> Optional[bytes]:
         """
         Generate TTS audio using REST API (non-streaming)
         
@@ -277,9 +284,11 @@ class CartesiaService:
             text: Text to synthesize
             voice_id: Voice ID (optional)
             sample_rate: Output sample rate (default 48000)
+            wrap_wav_for_browser: If True, wrap PCM in a WAV container (for browser data-URL
+                playback). Default False: raw pcm_s16le for LiveKit/WebRTC pipelines.
             
         Returns:
-            Complete audio bytes (PCM 16-bit LE) or None if failed
+            PCM s16le bytes, or WAV if wrap_wav_for_browser=True
         """
         if not self.api_key:
             logger.error("❌ Cartesia API key not set")
@@ -320,9 +329,18 @@ class CartesiaService:
             )
             
             if response.status_code == 200:
-                audio_bytes = response.content
-                logger.info(f"✅ Cartesia REST TTS success: {len(audio_bytes)} bytes")
-                return audio_bytes
+                pcm = response.content
+                if len(pcm) % 2:
+                    pcm = pcm[:-1]
+                if wrap_wav_for_browser:
+                    out = _pcm_to_wav(pcm, sample_rate=sample_rate, channels=1)
+                    logger.info(
+                        f"✅ Cartesia REST TTS success: {len(pcm)} PCM → {len(out)} WAV (browser)"
+                    )
+                else:
+                    out = pcm
+                    logger.info(f"✅ Cartesia REST TTS success: {len(out)} PCM bytes")
+                return out
             elif response.status_code == 401:
                 logger.error("❌ Cartesia: Invalid API key")
                 return None

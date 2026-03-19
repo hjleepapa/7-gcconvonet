@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import os
+from functools import partial
 import time
 import uuid
 import logging
@@ -20,6 +21,11 @@ from convonet.schemas import (
     AuthMessage,
     StartRecordingMessage,
     AudioChunkMessage,
+    AudioFrameMessage,
+    EndUtteranceMessage,
+    StreamResetMessage,
+    CancelMessage,
+    VoiceProvidersMessage,
     AuthOkMessage,
     GreetingMessage,
     ProcessingStartMessage,
@@ -270,16 +276,16 @@ def _build_transfer_twiml(extension: str, department: str, reason: str) -> str:
 DEFAULT_GREETING = "Hi, this is Convonet AI. What can I help you with today?"
 
 
-def _synthesize_greeting_sync(user_name: Optional[str] = None) -> Tuple[str, Optional[bytes]]:
+def _synthesize_greeting_sync(
+    user_name: Optional[str] = None, tts_provider_override: Optional[str] = None
+) -> Tuple[str, Optional[bytes]]:
     """Build greeting text and TTS audio. Runs in thread. Returns (text, audio_bytes)."""
     if user_name and user_name.strip():
         text = f"Hi {user_name.strip()}, this is Convonet AI. What can I help you with today?"
     else:
         text = DEFAULT_GREETING
     try:
-        from convonet.deepgram import get_deepgram_service
-        svc = get_deepgram_service()
-        audio = svc.synthesize_speech(text, voice="aura-asteria-en")
+        audio = _voice_tts_synthesize(text, tts_provider_override)
         return (text, audio)
     except Exception as e:
         logger.warning("Greeting TTS failed: %s", e)
@@ -294,7 +300,59 @@ active_connections: Dict[str, WebSocket] = {}
 ENABLE_VOICE_PIN = os.getenv("ENABLE_VOICE_PIN", "false").lower() == "true"
 VOICE_PIN = os.getenv("VOICE_PIN") or os.getenv("TEST_VOICE_PIN", "1234")
 
-# Per-session state for WebSocket voice: recording flag, authenticated, and accumulated audio chunks (bytes)
+# STT/TTS providers for WebSocket voice (voice-gateway only; agent-llm does not synthesize).
+# Env must be a single id, e.g. elevenlabs — not "deepgram|elevenlabs|cartesia" (doc paste).
+_STT_ALLOWED = frozenset({"deepgram", "elevenlabs", "cartesia", "speechmatics"})
+_TTS_ALLOWED = frozenset({"deepgram", "elevenlabs", "cartesia"})
+
+
+def _normalize_stt_provider(raw: Optional[str], default: str = "deepgram") -> str:
+    if not raw:
+        return default
+    s = raw.lower().strip()
+    if s in _STT_ALLOWED:
+        return s
+    for sep in ("|", ",", "/", " "):
+        if sep in s:
+            for part in s.replace(sep, " ").split():
+                p = part.strip().lower()
+                if p in _STT_ALLOWED:
+                    logger.warning(
+                        "VOICE_STT_PROVIDER=%r is not a single value; using first valid token %r",
+                        raw,
+                        p,
+                    )
+                    return p
+            break
+    return default
+
+
+def _normalize_tts_provider(raw: Optional[str], default: str = "deepgram") -> str:
+    if not raw:
+        return default
+    s = raw.lower().strip()
+    if s in _TTS_ALLOWED:
+        return s
+    for sep in ("|", ",", "/", " "):
+        if sep in s:
+            for part in s.replace(sep, " ").split():
+                p = part.strip().lower()
+                if p in _TTS_ALLOWED:
+                    logger.warning(
+                        "VOICE_TTS_PROVIDER=%r is not a single value; using first valid token %r",
+                        raw,
+                        p,
+                    )
+                    return p
+            break
+    return default
+
+
+VOICE_STT_PROVIDER = _normalize_stt_provider(os.getenv("VOICE_STT_PROVIDER"), "deepgram")
+VOICE_TTS_PROVIDER = _normalize_tts_provider(os.getenv("VOICE_TTS_PROVIDER"), "deepgram")
+DEEPGRAM_TTS_VOICE = (os.getenv("DEEPGRAM_VOICE_ID") or "aura-asteria-en").strip()
+
+# Per-session state for WebSocket voice: recording flag, authenticated, accumulated audio chunks, and control flags
 _session_state: Dict[str, Dict[str, Any]] = {}
 
 def _get_session(session_id: str) -> Dict[str, Any]:
@@ -305,8 +363,111 @@ def _get_session(session_id: str) -> Dict[str, Any]:
             "user_id": None,
             "user_name": None,
             "authenticated": not ENABLE_VOICE_PIN,
+            "cancel_requested": False,
         }
     return _session_state[session_id]
+
+
+def _voice_stt_transcribe(audio_bytes: bytes, language: str, provider_override: Optional[str] = None) -> Optional[str]:
+    """Transcribe one utterance buffer (WebM from browser or PCM)."""
+    p = _normalize_stt_provider(provider_override or VOICE_STT_PROVIDER, "deepgram")
+    if p in ("deepgram", "deepgram_batch", ""):
+        from convonet.deepgram import transcribe_audio_with_deepgram_webrtc
+
+        return transcribe_audio_with_deepgram_webrtc(audio_bytes, language=language or "en")
+
+    from convonet.voice_audio_util import pcm_s16le_mono_48k_from_audio, to_wav_mono_16k
+
+    if p == "elevenlabs":
+        wav = to_wav_mono_16k(audio_bytes)
+        if not wav:
+            logger.warning("ElevenLabs STT: ffmpeg WebM→WAV failed; falling back to Deepgram")
+            from convonet.deepgram import transcribe_audio_with_deepgram_webrtc
+
+            return transcribe_audio_with_deepgram_webrtc(audio_bytes, language=language or "en")
+        from convonet.elevenlabs import get_elevenlabs_service
+
+        el = get_elevenlabs_service()
+        if not el or not el.is_available():
+            logger.warning("ElevenLabs not configured; falling back to Deepgram")
+            from convonet.deepgram import transcribe_audio_with_deepgram_webrtc
+
+            return transcribe_audio_with_deepgram_webrtc(audio_bytes, language=language or "en")
+        return el.transcribe_audio_buffer(wav, language or "en")
+
+    if p == "cartesia":
+        pcm = pcm_s16le_mono_48k_from_audio(audio_bytes)
+        if not pcm:
+            logger.warning("Cartesia STT: ffmpeg conversion failed; falling back to Deepgram")
+            from convonet.deepgram import transcribe_audio_with_deepgram_webrtc
+
+            return transcribe_audio_with_deepgram_webrtc(audio_bytes, language=language or "en")
+        from convonet.cartesia.service import CartesiaService
+
+        cs = CartesiaService()
+        return cs.transcribe_audio_buffer(pcm, language or "en")
+
+    if p == "speechmatics":
+        wav = to_wav_mono_16k(audio_bytes)
+        if not wav:
+            logger.warning("Speechmatics STT: ffmpeg WebM→WAV failed; falling back to Deepgram")
+            from convonet.deepgram import transcribe_audio_with_deepgram_webrtc
+
+            return transcribe_audio_with_deepgram_webrtc(audio_bytes, language=language or "en")
+        from convonet.speechmatics import transcribe_speechmatics_batch
+
+        return transcribe_speechmatics_batch(wav, language or "en")
+
+    logger.warning("Unknown VOICE_STT_PROVIDER=%s; using Deepgram", p)
+    from convonet.deepgram import transcribe_audio_with_deepgram_webrtc
+
+    return transcribe_audio_with_deepgram_webrtc(audio_bytes, language=language or "en")
+
+
+def _voice_tts_synthesize(agent_text: str, provider_override: Optional[str] = None) -> Optional[bytes]:
+    """Synthesize assistant reply audio."""
+    p = _normalize_tts_provider(provider_override or VOICE_TTS_PROVIDER, "deepgram")
+    if p in ("deepgram", "deepgram_batch", ""):
+        from convonet.deepgram import get_deepgram_service
+
+        return get_deepgram_service().synthesize_speech(agent_text, voice=DEEPGRAM_TTS_VOICE)
+
+    if p == "elevenlabs":
+        from convonet.elevenlabs import get_elevenlabs_service
+
+        el = get_elevenlabs_service()
+        if not el or not el.is_available():
+            logger.warning("ElevenLabs TTS unavailable; falling back to Deepgram")
+            from convonet.deepgram import get_deepgram_service
+
+            return get_deepgram_service().synthesize_speech(agent_text, voice=DEEPGRAM_TTS_VOICE)
+        vid = (os.getenv("ELEVENLABS_VOICE_ID") or "").strip() or None
+        return el.synthesize(agent_text, voice_id=vid)
+
+    if p == "cartesia":
+        from convonet.cartesia.service import get_cartesia_service
+
+        cs = get_cartesia_service()
+        if not cs or not cs.is_available():
+            logger.warning("Cartesia TTS unavailable; falling back to Deepgram")
+            from convonet.deepgram import get_deepgram_service
+
+            return get_deepgram_service().synthesize_speech(agent_text, voice=DEEPGRAM_TTS_VOICE)
+        vid = (os.getenv("CARTESIA_VOICE_ID") or "").strip() or None
+        return cs.synthesize_rest_api(agent_text, voice_id=vid, wrap_wav_for_browser=True)
+
+    logger.warning("Unknown VOICE_TTS_PROVIDER=%s; using Deepgram", p)
+    from convonet.deepgram import get_deepgram_service
+
+    return get_deepgram_service().synthesize_speech(agent_text, voice=DEEPGRAM_TTS_VOICE)
+
+
+def _voice_tts_mime(provider_override: Optional[str] = None) -> str:
+    """MIME for browser <Audio> data URLs (Cartesia REST returns WAV; Deepgram/ElevenLabs MP3)."""
+    p = _normalize_tts_provider(provider_override or VOICE_TTS_PROVIDER, "deepgram")
+    if p == "cartesia":
+        return "audio/wav"
+    return "audio/mpeg"
 
 
 def _lookup_user_by_pin(pin: str) -> Optional[Tuple[str, str]]:
@@ -373,9 +534,10 @@ def _run_stt_tts_pipeline_sync(
     try:
         # Buffer captured / process_audio_async entered (same moment in batch pipeline)
         buffer_capture_ms = (time.time() - t0) * 1000
-        # STT (Deepgram batch)
-        from convonet.deepgram import transcribe_audio_with_deepgram_webrtc
-        transcript = transcribe_audio_with_deepgram_webrtc(audio_bytes, language=language or "en")
+        state = _get_session(session_id)
+        stt_override = (state.get("stt_provider") or None) if isinstance(state, dict) else None
+        tts_override = (state.get("tts_provider") or None) if isinstance(state, dict) else None
+        transcript = _voice_stt_transcribe(audio_bytes, language or "en", stt_override)
         stt_ms = (time.time() - t0) * 1000
         if not transcript or not transcript.strip():
             return (None, None, None, None)
@@ -388,11 +550,13 @@ def _run_stt_tts_pipeline_sync(
         }
         if user_name:
             payload["user_name"] = user_name
+        effective_stt = _normalize_stt_provider(stt_override or VOICE_STT_PROVIDER, "deepgram")
+        effective_tts = _normalize_tts_provider(tts_override or VOICE_TTS_PROVIDER, "deepgram")
         payload["metadata"] = {
             "source": "voice",
             "t0": t0,
-            "stt_provider": "deepgram",
-            "tts_provider": "deepgram",
+            "stt_provider": effective_stt,
+            "tts_provider": effective_tts,
             "voice_timing": {
                 "buffer_capture_ms": round(buffer_capture_ms, 0),
                 "process_audio_async_ms": round(buffer_capture_ms, 0),
@@ -412,10 +576,7 @@ def _run_stt_tts_pipeline_sync(
             _cache_transfer_context_for_call_center(ext, transfer_context, call_sid=None, call_id=session_id)
         if not agent_text.strip():
             return (transcript, "", None, transfer_marker)
-        # TTS (Deepgram)
-        from convonet.deepgram import get_deepgram_service
-        svc = get_deepgram_service()
-        tts_audio = svc.synthesize_speech(agent_text, voice="aura-asteria-en")
+        tts_audio = _voice_tts_synthesize(agent_text, tts_override)
         return (transcript, agent_text, tts_audio, transfer_marker)
     except Exception as e:
         logger.exception("Pipeline error: %s", e)
@@ -431,7 +592,10 @@ async def _run_pipeline_and_send(
     user_name: Optional[str] = None,
     t0: Optional[float] = None,
 ) -> None:
-    """Run STT -> agent -> TTS in executor and send results over WebSocket. t0 = when user clicked stop (for voice_timing)."""
+    """Run STT -> agent -> TTS in executor and send results over WebSocket.
+
+    T0 for voice_timing is utterance end detection time (VAD silence or manual stop).
+    """
     if t0 is None:
         t0 = time.time()
     loop = asyncio.get_event_loop()
@@ -459,6 +623,11 @@ async def _run_pipeline_and_send(
             t0,
         )
         transcript, agent_text, tts_audio, transfer_marker = (result + (None, None, None))[:4]
+        state = _get_session(session_id)
+        if state.get("cancel_requested"):
+            logger.info("Skipping send for %s due to cancel_requested (barge-in)", session_id)
+            state["cancel_requested"] = False
+            return
         if not transcript or not transcript.strip():
             await websocket.send_json(
                 ErrorMessage(session_id=session_id, message="No speech detected. Please try again.").model_dump(mode="json")
@@ -486,10 +655,20 @@ async def _run_pipeline_and_send(
             else:
                 logger.info("Twilio REST transfer NOT initiated: %s", err or "unknown")
         if tts_audio:
+            state = _get_session(session_id)
+            if state.get("cancel_requested"):
+                logger.info("Skipping TTS send for %s due to cancel_requested (barge-in)", session_id)
+                state["cancel_requested"] = False
+                return
             b64 = base64.b64encode(tts_audio).decode("utf-8")
             await websocket.send_json(
                 AudioChunkOutMessage(
-                    session_id=session_id, chunk_index=0, total_chunks=1, data_b64=b64, is_final=True
+                    session_id=session_id,
+                    chunk_index=0,
+                    total_chunks=1,
+                    data_b64=b64,
+                    is_final=True,
+                    mime_type=_voice_tts_mime(state.get("tts_provider")),
                 ).model_dump(mode="json")
             )
     except Exception as e:
@@ -772,6 +951,14 @@ async def websocket_endpoint(websocket: WebSocket):
                     state["authenticated"] = True
                     state["user_id"] = uid
                     state["user_name"] = name
+                    if getattr(auth, "stt_provider", None) and str(auth.stt_provider).strip():
+                        state["stt_provider"] = _normalize_stt_provider(
+                            auth.stt_provider, VOICE_STT_PROVIDER
+                        )
+                    if getattr(auth, "tts_provider", None) and str(auth.tts_provider).strip():
+                        state["tts_provider"] = _normalize_tts_provider(
+                            auth.tts_provider, VOICE_TTS_PROVIDER
+                        )
                     await websocket.send_json(
                         AuthOkMessage(
                             session_id=session_id,
@@ -785,7 +972,12 @@ async def websocket_endpoint(websocket: WebSocket):
                         try:
                             loop = asyncio.get_event_loop()
                             greeting_text, greeting_audio = await loop.run_in_executor(
-                                None, _synthesize_greeting_sync, state.get("user_name")
+                                None,
+                                partial(
+                                    _synthesize_greeting_sync,
+                                    state.get("user_name"),
+                                    state.get("tts_provider"),
+                                ),
                             )
                             if greeting_audio:
                                 b64 = base64.b64encode(greeting_audio).decode("utf-8")
@@ -794,6 +986,7 @@ async def websocket_endpoint(websocket: WebSocket):
                                         session_id=session_id,
                                         text=greeting_text,
                                         data_b64=b64,
+                                        mime_type=_voice_tts_mime(state.get("tts_provider")),
                                     ).model_dump(mode="json")
                                 )
                                 logger.info("Greeting sent to %s", session_id)
@@ -817,11 +1010,55 @@ async def websocket_endpoint(websocket: WebSocket):
                     state["recording"] = True
                     state["chunks"] = []
                     state["language"] = (start.language or "en-US").split("-")[0] or "en"
+                    # Per-session STT/TTS provider overrides (optional)
+                    if getattr(start, "stt_provider", None) and str(start.stt_provider).strip():
+                        state["stt_provider"] = _normalize_stt_provider(
+                            start.stt_provider, VOICE_STT_PROVIDER
+                        )
+                    if getattr(start, "tts_provider", None) and str(start.tts_provider).strip():
+                        state["tts_provider"] = _normalize_tts_provider(
+                            start.tts_provider, VOICE_TTS_PROVIDER
+                        )
+                    # Streaming STT: buffer frames until end_utterance
+                    if (getattr(start, "stt_mode", None) or "").lower() == "streaming":
+                        state["streaming_mode"] = True
+                        state["streaming_frames"] = []
+                        state["streaming_processing"] = False
+                    else:
+                        state["streaming_mode"] = False
                     await websocket.send_json(
                         StatusMessage(session_id=sid, message="Recording…").model_dump(mode="json")
                     )
-                    logger.info(f"Recording started for session {sid}")
-                    
+                    logger.info(f"Recording started for session {sid} (streaming={state.get('streaming_mode')})")
+
+                elif msg_type == ClientMessageType.VOICE_PROVIDERS:
+                    vp = VoiceProvidersMessage(**message)
+                    sid = vp.session_id or session_id
+                    st_vp = _get_session(sid)
+                    if ENABLE_VOICE_PIN and not st_vp.get("authenticated"):
+                        await websocket.send_json(
+                            ErrorMessage(
+                                session_id=sid,
+                                message="Please authenticate with your PIN first.",
+                                code="auth_required",
+                            ).model_dump(mode="json")
+                        )
+                        continue
+                    if vp.stt_provider and str(vp.stt_provider).strip():
+                        st_vp["stt_provider"] = _normalize_stt_provider(
+                            vp.stt_provider, VOICE_STT_PROVIDER
+                        )
+                    if vp.tts_provider and str(vp.tts_provider).strip():
+                        st_vp["tts_provider"] = _normalize_tts_provider(
+                            vp.tts_provider, VOICE_TTS_PROVIDER
+                        )
+                    logger.info(
+                        "Session %s voice_providers: stt=%s tts=%s",
+                        sid,
+                        st_vp.get("stt_provider"),
+                        st_vp.get("tts_provider"),
+                    )
+
                 elif msg_type == ClientMessageType.AUDIO_CHUNK:
                     chunk = AudioChunkMessage(**message)
                     sid = chunk.session_id or session_id
@@ -839,6 +1076,10 @@ async def websocket_endpoint(websocket: WebSocket):
                     stop_sid = message.get("session_id") or session_id
                     state = _get_session(stop_sid)
                     state["recording"] = False
+                    if state.get("streaming_mode"):
+                        state["streaming_mode"] = False
+                        state.pop("streaming_frames", None)
+                        state.pop("streaming_processing", None)
                     chunks = state.get("chunks") or []
                     language = state.get("language") or "en"
                     logger.info(f"Stop recording for {stop_sid}, {len(chunks)} chunks")
@@ -852,7 +1093,7 @@ async def websocket_endpoint(websocket: WebSocket):
                             ).model_dump(mode="json")
                         )
                     else:
-                        t0 = time.time()  # T0 = user clicked "Click to stop" for agent-monitor voice_timing
+                        t0 = time.time()  # T0 = utterance end detected (VAD silence or manual stop)
                         asyncio.create_task(
                             _run_pipeline_and_send(
                                 websocket,
@@ -864,7 +1105,101 @@ async def websocket_endpoint(websocket: WebSocket):
                                 t0=t0,
                             )
                         )
-                    
+
+                elif msg_type == ClientMessageType.AUDIO_FRAME:
+                    frame = AudioFrameMessage(**message)
+                    sid = frame.session_id or session_id
+                    state = _get_session(sid)
+                    if state.get("streaming_mode") and state.get("recording"):
+                        try:
+                            data_bytes = base64.b64decode(frame.data_b64)
+                            state.setdefault("streaming_frames", []).append(data_bytes)
+                            n = len(state["streaming_frames"])
+                            total = sum(len(f) for f in state["streaming_frames"])
+                            if frame.sequence == 0 or frame.sequence % 20 == 0:
+                                logger.info(f"Streaming: audio_frame seq={frame.sequence} for {sid}, frames={n}, total_bytes={total}")
+                        except Exception as e:
+                            logger.warning("Invalid audio_frame b64: %s", e)
+                    elif not (state.get("streaming_mode") and state.get("recording")):
+                        logger.warning("audio_frame ignored for %s (streaming_mode=%s, recording=%s)", sid, state.get("streaming_mode"), state.get("recording"))
+
+                elif msg_type == ClientMessageType.END_UTTERANCE:
+                    end_msg = EndUtteranceMessage(**message)
+                    sid = end_msg.session_id or session_id
+                    state = _get_session(sid)
+                    if not state.get("streaming_mode"):
+                        logger.warning("end_utterance rejected for %s: not in streaming mode (send start_recording with stt_mode=streaming first)", sid)
+                        await websocket.send_json(
+                            ErrorMessage(
+                                session_id=sid,
+                                message="end_utterance only valid in streaming mode.",
+                                code="invalid_mode",
+                            ).model_dump(mode="json")
+                        )
+                        continue
+                    if state.get("streaming_processing"):
+                        await websocket.send_json(
+                            ErrorMessage(
+                                session_id=sid,
+                                message="Previous utterance still processing.",
+                                code="busy",
+                            ).model_dump(mode="json")
+                        )
+                        continue
+                    frames = state.get("streaming_frames") or []
+                    state["streaming_frames"] = []
+                    # New utterance: clear any previous cancel so this turn can send normally
+                    # (cancel only applies to the in-flight previous turn that was interrupted)
+                    if state.get("cancel_requested"):
+                        logger.info("Clearing cancel_requested for %s at start of new utterance", sid)
+                        state["cancel_requested"] = False
+                    state["streaming_processing"] = True
+                    audio_bytes = b"".join(frames) if frames else b""
+                    logger.info(f"End utterance for {sid}: {len(frames)} frames, {len(audio_bytes)} bytes")
+                    min_bytes = 2000
+                    if len(audio_bytes) < min_bytes:
+                        state["streaming_processing"] = False
+                        await websocket.send_json(
+                            ErrorMessage(
+                                session_id=sid,
+                                message="Utterance too short. Speak a bit longer and try again.",
+                            ).model_dump(mode="json")
+                        )
+                    else:
+                        language = state.get("language") or "en"
+                        t0 = time.time()
+
+                        async def _streaming_pipeline_done():
+                            try:
+                                await _run_pipeline_and_send(
+                                    websocket,
+                                    sid,
+                                    audio_bytes,
+                                    language,
+                                    user_id=state.get("user_id"),
+                                    user_name=state.get("user_name"),
+                                    t0=t0,
+                                )
+                            finally:
+                                _get_session(sid)["streaming_processing"] = False
+
+                        asyncio.create_task(_streaming_pipeline_done())
+
+                elif msg_type == ClientMessageType.STREAM_RESET:
+                    reset = StreamResetMessage(**message)
+                    sid = reset.session_id or session_id
+                    state = _get_session(sid)
+                    if state.get("streaming_mode"):
+                        state["streaming_frames"] = []
+                    logger.debug("Stream reset for %s", sid)
+
+                elif msg_type == ClientMessageType.CANCEL:
+                    cancel = CancelMessage(**message)
+                    sid = cancel.session_id or session_id
+                    state = _get_session(sid)
+                    state["cancel_requested"] = True
+                    logger.info("Cancel requested for %s (barge-in)", sid)
+
                 elif msg_type == ClientMessageType.HEARTBEAT:
                     pass
                     

@@ -106,6 +106,15 @@ async def voice_assistant_ui(request: Request):
     )
 
 
+@app.get("/vad", response_class=HTMLResponse)
+async def voice_assistant_vad_ui(request: Request):
+    """Voice assistant UI with simple client-side VAD (auto listening, no Start/Stop button)."""
+    return templates.TemplateResponse(
+        "voice_assistant_vad.html",
+        {"request": request, "url_for": _url_for, "websocket_path": "/webrtc/ws"},
+    )
+
+
 @app.get("/mortgage_dashboard", response_class=HTMLResponse)
 async def mortgage_dashboard_ui(request: Request):
     """Mortgage dashboard UI."""
