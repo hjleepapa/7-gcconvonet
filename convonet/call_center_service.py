@@ -29,7 +29,9 @@ _template_dirs = [
     os.path.join(_root, "call_center", "templates"),
     os.path.join(_root, "templates"),
 ]
-templates = Jinja2Templates(directory=[d for d in _template_dirs if os.path.isdir(d)] or ["templates"])
+_template_roots = [d for d in _template_dirs if os.path.isdir(d)] or [os.path.join(_root, "templates")]
+templates = Jinja2Templates(directory=_template_roots)
+logger.info("Jinja2 template roots: %s", _template_roots)
 
 
 def _url_for(name: str, **kwargs) -> str:
@@ -70,7 +72,7 @@ async def landing_page(request: Request):
         "stt_providers": ["Google", "Deepgram", "OpenAI"],
         "tts_providers": ["Google", "ElevenLabs", "Cartesia"],
     }
-    return templates.TemplateResponse("index.html", context)
+    return templates.TemplateResponse(request, "index.html", context)
 
 
 def _get_sip_config() -> dict:
@@ -87,6 +89,7 @@ def _get_sip_config() -> dict:
 async def call_center_ui(request: Request):
     """Serves the Unified Agent Desktop UI"""
     return templates.TemplateResponse(
+        request,
         "call_center.html",
         {
             "request": request,
@@ -101,6 +104,7 @@ async def call_center_ui(request: Request):
 async def voice_assistant_ui(request: Request):
     """Voice assistant UI: connects to FastAPI WebSocket at /webrtc/ws (voice-gateway-service). No LiveKit."""
     return templates.TemplateResponse(
+        request,
         "voice_assistant.html",
         {"request": request, "url_for": _url_for, "websocket_path": "/webrtc/ws"},
     )
@@ -110,6 +114,7 @@ async def voice_assistant_ui(request: Request):
 async def voice_assistant_vad_ui(request: Request):
     """Voice assistant UI with simple client-side VAD (auto listening, no Start/Stop button)."""
     return templates.TemplateResponse(
+        request,
         "voice_assistant_vad.html",
         {"request": request, "url_for": _url_for, "websocket_path": "/webrtc/ws"},
     )
@@ -119,6 +124,7 @@ async def voice_assistant_vad_ui(request: Request):
 async def mortgage_dashboard_ui(request: Request):
     """Mortgage dashboard UI."""
     return templates.TemplateResponse(
+        request,
         "mortgage_dashboard.html",
         {"request": request, "url_for": _url_for},
     )
@@ -128,6 +134,7 @@ async def mortgage_dashboard_ui(request: Request):
 async def agent_monitor_ui(request: Request):
     """Agent monitor dashboard UI."""
     return templates.TemplateResponse(
+        request,
         "agent_monitor_dashboard.html",
         {"request": request, "url_for": _url_for},
     )
@@ -137,6 +144,7 @@ async def agent_monitor_ui(request: Request):
 async def tool_execution_ui(request: Request):
     """Tool execution dashboard UI."""
     return templates.TemplateResponse(
+        request,
         "tool_execution_dashboard.html",
         {"request": request, "url_for": _url_for},
     )
@@ -146,6 +154,7 @@ async def tool_execution_ui(request: Request):
 async def convonet_tech_spec(request: Request):
     """Technical specification page."""
     return templates.TemplateResponse(
+        request,
         "convonet_tech_spec.html",
         {"request": request, "url_for": _url_for},
     )
@@ -155,6 +164,7 @@ async def convonet_tech_spec(request: Request):
 async def convonet_system_architecture(request: Request):
     """System architecture diagram page."""
     return templates.TemplateResponse(
+        request,
         "convonet_system_architecture.html",
         {"request": request, "url_for": _url_for},
     )
@@ -164,6 +174,7 @@ async def convonet_system_architecture(request: Request):
 async def convonet_sequence_diagram(request: Request):
     """Sequence diagram page."""
     return templates.TemplateResponse(
+        request,
         "convonet_sequence_diagram.html",
         {"request": request, "url_for": _url_for},
     )

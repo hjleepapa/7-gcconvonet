@@ -156,6 +156,11 @@ def _tool_calls_to_activities_and_suitecrm(tool_calls_info):
                 activity["meeting_id"] = tool_content["meeting_id"]
                 activity["title"] = "Appointment booked"
                 suitecrm_context["meeting_id"] = tool_content["meeting_id"]
+            if tool_content.get("task_id"):
+                activity["task_id"] = tool_content["task_id"]
+                suitecrm_context["task_id"] = tool_content["task_id"]
+                if not tool_content.get("meeting_id"):
+                    activity["title"] = "Task created"
             if tool_content.get("case_id"):
                 activity["case_id"] = tool_content["case_id"]
                 activity["title"] = activity.get("title") or "Case created"
@@ -1221,7 +1226,15 @@ async def _preload_mcp_tools():
                                 base_env[env_key] = env_value
                     # Defensive: for suitecrm, explicitly ensure SUITECRM_* from os.environ
                     if server_name == "suitecrm":
-                        for k in ("SUITECRM_BASE_URL", "SUITECRM_CLIENT_ID", "SUITECRM_CLIENT_SECRET", "SUITECRM_USERNAME", "SUITECRM_PASSWORD"):
+                        for k in (
+                            "SUITECRM_BASE_URL",
+                            "SUITECRM_CLIENT_ID",
+                            "SUITECRM_CLIENT_SECRET",
+                            "SUITECRM_USERNAME",
+                            "SUITECRM_PASSWORD",
+                            "CRM_INTEGRATION_URL",
+                            "SUITECRM_USE_CRM_INTEGRATION",
+                        ):
                             v = os.environ.get(k)
                             if v and (not base_env.get(k) or base_env.get(k) == "${" + k + "}"):
                                 base_env[k] = v
@@ -1447,7 +1460,15 @@ async def _get_agent_graph(
                         base_env[env_key] = env_value
             # Defensive: for suitecrm, explicitly ensure SUITECRM_* from os.environ (Render may set them after config load)
             if server_name == "suitecrm":
-                for k in ("SUITECRM_BASE_URL", "SUITECRM_CLIENT_ID", "SUITECRM_CLIENT_SECRET", "SUITECRM_USERNAME", "SUITECRM_PASSWORD"):
+                for k in (
+                    "SUITECRM_BASE_URL",
+                    "SUITECRM_CLIENT_ID",
+                    "SUITECRM_CLIENT_SECRET",
+                    "SUITECRM_USERNAME",
+                    "SUITECRM_PASSWORD",
+                    "CRM_INTEGRATION_URL",
+                    "SUITECRM_USE_CRM_INTEGRATION",
+                ):
                     v = os.environ.get(k)
                     if v and (not base_env.get(k) or base_env.get(k) == "${" + k + "}"):
                         base_env[k] = v

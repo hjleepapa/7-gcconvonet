@@ -69,7 +69,7 @@ SERVICE 6: CARE MANAGEMENT
 SERVICE 7: PROVIDER-SIDE CLINICAL SERVICES (SuiteCRM)
 - Check patient existence: check_patient_exists(phone)
 - Register/Onboard patient: onboard_patient(first_name, last_name, phone, dob)
-- Book appointment: book_appointment(patient_id, appointment_type, date_start, duration)
+- Book appointment: book_appointment(patient_id, appointment_type, date_start, duration, case_id=...) — ties the visit to a SuiteCRM Case (pass case_id from log_clinical_intake when you have it; otherwise a Case is chosen or created automatically)
 - Log medical triage/intake: log_clinical_intake(patient_id, symptoms, triage_notes, priority)
 - Save call summary/SOAP note: save_call_summary(patient_id, summary)
 
@@ -106,7 +106,7 @@ PRIOR AUTHORIZATION:
 PROVIDERS & CLINICAL (SuiteCRM):
 - "Am I in your system?" / "Check my records" → IMMEDIATELY use check_patient_exists(phone=<member_phone>)
 - "I'm a new patient" / "Register me" → Gather first_name, last_name, phone, dob then use onboard_patient()
-- "I need to schedule an appointment" / "Book a visit" → use book_appointment(patient_id=<id>, ...)
+- "I need to schedule an appointment" / "Book a visit" → use book_appointment(patient_id=<id>, ...); include case_id=<id> if this session created or referenced a Case (e.g. after log_clinical_intake)
 - "I have a cough/fever" / "Triage me" → Gather symptoms, perform triage, then use log_clinical_intake()
 - "Summary of our talk" / "Save my notes" → use save_call_summary(patient_id=<id>, summary=<text>)
 

@@ -31,6 +31,7 @@ class MeetingCreate(BaseModel):
     subject: str
     date_start: str
     duration_minutes: int = 30
+    case_id: Optional[str] = None
 
 class CaseCreate(BaseModel):
     patient_id: str
@@ -55,6 +56,7 @@ async def health_check():
 
 @app.post("/patient/search")
 async def search_patient(phone: str = Body(..., embed=True)):
+    logger.info("CRM patient/search phone=%s", (phone or "")[:6] + "***" if len(phone or "") > 6 else phone)
     client = get_client()
     result = client.search_patient(phone)
     if not result["success"]:
@@ -63,6 +65,7 @@ async def search_patient(phone: str = Body(..., embed=True)):
 
 @app.post("/patient/create")
 async def create_patient(data: PatientCreate):
+    logger.info("CRM patient/create %s %s", data.first_name, data.last_name)
     client = get_client()
     kwargs = data.additional_attributes or {}
     result = client.create_patient(
@@ -77,19 +80,32 @@ async def create_patient(data: PatientCreate):
 
 @app.post("/meeting/create")
 async def create_meeting(data: MeetingCreate):
+    logger.info(
+        "CRM meeting/create patient_id=%s subject=%s case_id=%s",
+        (data.patient_id or "")[:12] + "…",
+        (data.subject or "")[:60],
+        data.case_id or "(auto)",
+    )
     client = get_client()
     result = client.create_meeting(
         patient_id=data.patient_id,
         subject=data.subject,
         date_start=data.date_start,
-        duration_minutes=data.duration_minutes
+        duration_minutes=data.duration_minutes,
+        case_id=data.case_id,
     )
     if not result["success"]:
         raise HTTPException(status_code=500, detail=result.get("error", "Meeting creation failed"))
+    logger.info(
+        "CRM meeting/create OK meeting_id=%s case_id=%s",
+        result.get("meeting_id"),
+        result.get("case_id"),
+    )
     return result
 
 @app.post("/case/create")
 async def create_case(data: CaseCreate):
+    logger.info("CRM case/create patient_id=%s subject=%s", (data.patient_id or "")[:12], (data.subject or "")[:50])
     client = get_client()
     result = client.create_case(
         patient_id=data.patient_id,
@@ -103,6 +119,7 @@ async def create_case(data: CaseCreate):
 
 @app.post("/note/create")
 async def create_note(data: NoteCreate):
+    logger.info("CRM note/create patient_id=%s", (data.patient_id or "")[:12])
     client = get_client()
     result = client.create_note(
         patient_id=data.patient_id,

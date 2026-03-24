@@ -22,7 +22,7 @@ All of this runs in **voice-gateway-service** only. The browser sends audio to t
 - **Deepgram STT** accepts WebM from the browser directly.
 - **ElevenLabs / Cartesia / Speechmatics STT** use **ffmpeg** (installed in the voice-gateway Docker image) to convert WebM → WAV/PCM before calling the vendor API. If conversion fails, the gateway falls back to **Deepgram** STT when possible.
 - **Greeting TTS** after PIN login uses the same `VOICE_TTS_PROVIDER` and voice env vars as the main reply.
-- **Speechmatics TTS** returns **WAV 16 kHz** (preview endpoint). The voice WebSocket sends `mime_type: audio/wav` for that provider. Optional package `speechmatics-tts` is listed in `requirements-render.txt`; if import fails, the gateway uses HTTP to `preview.tts.speechmatics.com`.
+- **Speechmatics TTS** returns **WAV 16 kHz** via HTTP to `preview.tts.speechmatics.com` (same `SPEECHMATICS_API_KEY` as STT). The voice WebSocket sends `mime_type: audio/wav`. No extra Python package is required; optionally install `speechmatics-tts` locally if you want SDK examples from Speechmatics docs.
 
 ## Examples
 

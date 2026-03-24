@@ -16,7 +16,7 @@ class SuiteCRMClient:
     def __init__(self, base_url: Optional[str] = None):
         # Use provided URL or default (SuiteCRM at 34.9.14.57)
         self.base_url = (base_url or os.getenv("SUITECRM_BASE_URL", "http://34.9.14.57")).rstrip('/')
-        self.api_url = f"{self.base_url}/Api/V8"
+        self._api_roots_cache: Optional[List[str]] = None
         # Multiple token paths - SuiteCRM versions vary (7.10 vs 8.x)
         self.token_urls = [
             f"{self.base_url}/Api/access_token",
@@ -32,6 +32,61 @@ class SuiteCRMClient:
         self.token = None
         self.token_expires_at = 0
         self._last_auth_error: Optional[str] = None
+        self._cached_assigned_user_id: Optional[str] = None
+
+    def _get_api_roots(self) -> List[str]:
+        """SuiteCRM 8 may serve V8 at /Api/V8 or /legacy/Api/V8 depending on install."""
+        if self._api_roots_cache is not None:
+            return self._api_roots_cache
+        primary = (os.getenv("SUITECRM_API_PATH") or "/Api/V8").strip().rstrip("/") or "/Api/V8"
+        if not primary.startswith("/"):
+            primary = "/" + primary
+        roots = [f"{self.base_url}{primary}"]
+        if os.getenv("SUITECRM_TRY_LEGACY_API", "1").lower() not in ("0", "false", "no"):
+            leg = (os.getenv("SUITECRM_LEGACY_API_PATH") or "/legacy/Api/V8").strip().rstrip("/") or "/legacy/Api/V8"
+            if not leg.startswith("/"):
+                leg = "/" + leg
+            alt = f"{self.base_url}{leg}"
+            if alt not in roots:
+                roots.append(alt)
+        self._api_roots_cache = roots
+        return roots
+
+    @staticmethod
+    def _v8_body_errors(body: Any) -> Optional[List[Any]]:
+        if isinstance(body, dict) and body.get("errors"):
+            return body["errors"]
+        return None
+
+    def _default_assigned_user_id(self) -> Optional[str]:
+        """
+        Meetings/Tasks without assigned_user_id often do not appear in list views.
+        Prefer SUITECRM_ASSIGNED_USER_ID; else resolve API user id from SUITECRM_USERNAME.
+        """
+        explicit = os.getenv("SUITECRM_ASSIGNED_USER_ID")
+        if explicit and explicit.strip():
+            return explicit.strip()
+        if self._cached_assigned_user_id is not None:
+            return self._cached_assigned_user_id or None
+        uname = (self.username or "").strip()
+        if not uname:
+            self._cached_assigned_user_id = ""
+            return None
+        endpoint = f"module/Users?filter[user_name][eq]={quote(uname)}"
+        result = self._make_request("GET", endpoint)
+        if not result.get("success"):
+            self._cached_assigned_user_id = ""
+            return None
+        rows = result.get("data", {}).get("data") or []
+        if isinstance(rows, list) and rows:
+            uid = rows[0].get("id")
+            if uid:
+                self._cached_assigned_user_id = uid
+                logger.info("SuiteCRM: using assigned_user_id from Users lookup (%s → %s)", uname, uid)
+                return uid
+        self._cached_assigned_user_id = ""
+        logger.warning("SuiteCRM: could not resolve User id for user_name=%s; set SUITECRM_ASSIGNED_USER_ID", uname)
+        return None
 
     def authenticate(self) -> bool:
         """
@@ -126,30 +181,63 @@ class SuiteCRMClient:
             detail = getattr(self, "_last_auth_error", None) or "Check SUITECRM_* env vars in Render Dashboard"
             return {"success": False, "error": f"Authentication failed: {detail}"}
 
-        url = f"{self.api_url}/{endpoint.lstrip('/')}"
-        
-        try:
-            response = requests.request(method, url, headers=self._get_headers(), timeout=15, **kwargs)
-            
-            # If 401, token might have expired unexpectedly, try once more after re-auth
-            if response.status_code == 401:
-                logger.warning("⚠️ SuiteCRM token expired, retrying...")
-                self.token = None
-                if self.authenticate():
-                    response = requests.request(method, url, headers=self._get_headers(), timeout=15, **kwargs)
-            
-            response.raise_for_status()
-            return {"success": True, "data": response.json()}
-        except Exception as e:
-            logger.error(f"❌ SuiteCRM request failed ({method} {endpoint}): {e}")
-            if hasattr(e, 'response') and e.response is not None:
+        roots = self._get_api_roots()
+        last_exc: Optional[Exception] = None
+        for ri, api_root in enumerate(roots):
+            url = f"{api_root}/{endpoint.lstrip('/')}"
+            try:
+                response = requests.request(method, url, headers=self._get_headers(), timeout=15, **kwargs)
+
+                if response.status_code == 401:
+                    logger.warning("⚠️ SuiteCRM token expired, retrying...")
+                    self.token = None
+                    if self.authenticate():
+                        response = requests.request(method, url, headers=self._get_headers(), timeout=15, **kwargs)
+
+                if response.status_code == 404 and ri < len(roots) - 1:
+                    logger.info("SuiteCRM %s %s → 404 at %s; trying next API root", method, endpoint, api_root)
+                    continue
+
+                response.raise_for_status()
                 try:
-                    error_data = e.response.json()
-                    logger.error(f"❌ Error details: {error_data}")
-                    return {"success": False, "error": str(e), "details": error_data}
-                except:
-                    pass
-            return {"success": False, "error": str(e)}
+                    body = response.json()
+                except Exception as je:
+                    logger.error("SuiteCRM non-JSON response (%s %s): %s", method, endpoint, response.text[:500])
+                    return {"success": False, "error": f"Invalid JSON: {je}"}
+
+                errs = self._v8_body_errors(body)
+                if errs:
+                    logger.error("SuiteCRM JSON:API errors (%s %s): %s", method, endpoint, errs)
+                    return {"success": False, "error": "SuiteCRM API returned errors", "details": body}
+
+                if method in ("POST", "PATCH", "PUT") and isinstance(body, dict):
+                    data = body.get("data")
+                    rid = data.get("id") if isinstance(data, dict) else None
+                    rtype = data.get("type") if isinstance(data, dict) else None
+                    if rid:
+                        logger.info("SuiteCRM write OK: %s %s id=%s", method, rtype or endpoint, rid)
+
+                return {"success": True, "data": body}
+            except requests.exceptions.HTTPError as e:
+                last_exc = e
+                if e.response is not None and e.response.status_code == 404 and ri < len(roots) - 1:
+                    logger.info("SuiteCRM HTTPError 404 at %s; trying next API root", api_root)
+                    continue
+                logger.error("❌ SuiteCRM request failed (%s %s): %s", method, endpoint, e)
+                if e.response is not None:
+                    try:
+                        error_data = e.response.json()
+                        logger.error("❌ Error details: %s", error_data)
+                        return {"success": False, "error": str(e), "details": error_data}
+                    except Exception:
+                        pass
+                return {"success": False, "error": str(e)}
+            except Exception as e:
+                last_exc = e
+                logger.error("❌ SuiteCRM request failed (%s %s): %s", method, endpoint, e)
+                break
+
+        return {"success": False, "error": str(last_exc) if last_exc else "SuiteCRM request failed"}
 
     def get_contact_by_id(self, contact_id: str) -> Dict[str, Any]:
         """
@@ -231,26 +319,125 @@ class SuiteCRMClient:
             }
         return result
 
-    def create_meeting(self, patient_id: str, subject: str, date_start: str, duration_minutes: int = 30) -> Dict[str, Any]:
+    def create_task(
+        self,
+        patient_id: str,
+        subject: str,
+        date_due: str,
+        description: str = "",
+    ) -> Dict[str, Any]:
         """
-        Schedule an appointment (Meeting) and relate it to a Contact.
-        date_start should be in ISO format (YYYY-MM-DD HH:MM:SS)
-        SuiteCRM POST module only accepts attributes, id, type - not relationships.
-        So we create the Meeting first, then add the Contact relationship in a separate call.
+        Create a Task (Tasks module) and link to Contact.
+        Use for list visibility under Activities → Tasks; date_due uses same format as Meeting date_start.
+        """
+        attrs: Dict[str, Any] = {
+            "name": subject,
+            "date_due": date_due,
+            "status": "Not Started",
+        }
+        if description:
+            attrs["description"] = description
+        uid = self._default_assigned_user_id()
+        if uid:
+            attrs["assigned_user_id"] = uid
+        payload = {"data": {"type": "Tasks", "attributes": attrs}}
+        result = self._make_request("POST", "module", json=payload)
+        if not result["success"]:
+            return result
+        task = result["data"].get("data", {})
+        task_id = task.get("id")
+        if not task_id:
+            return {"success": False, "error": "Task created but no ID returned"}
+        rel_payload = {"data": {"type": "Contacts", "id": patient_id}}
+        rel_result = self._make_request(
+            "POST",
+            f"module/Tasks/{task_id}/relationships/contacts",
+            json=rel_payload,
+        )
+        if not rel_result["success"]:
+            logger.warning(
+                "Task %s created but link to contact %s failed: %s",
+                task_id,
+                patient_id,
+                rel_result.get("error"),
+            )
+        return {
+            "success": True,
+            "task_id": task_id,
+            "contact_linked": rel_result["success"],
+        }
+
+    def find_case_for_contact(self, patient_id: str) -> Optional[str]:
+        """Pick a related Case for this contact; prefer non-closed status when attributes are present."""
+        pid = (patient_id or "").strip()
+        if not pid:
+            return None
+        endpoint = f"module/Contacts/{quote(pid)}/relationships/cases"
+        result = self._make_request("GET", endpoint)
+        if not result.get("success"):
+            return None
+        rows = result.get("data", {}).get("data")
+        if not isinstance(rows, list) or not rows:
+            return None
+        closed = {"closed", "resolved", "duplicate", "rejected", "dead"}
+        fallback: Optional[str] = None
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            cid = row.get("id")
+            if not cid:
+                continue
+            if fallback is None:
+                fallback = cid
+            attrs = row.get("attributes") or {}
+            st = (attrs.get("status") or "").strip().lower()
+            if st and st not in closed:
+                return cid
+        return fallback
+
+    def link_meeting_to_case(self, case_id: str, meeting_id: str) -> Dict[str, Any]:
+        """Attach a Meeting to a Case (shows on the Case Activities / Meetings subpanel)."""
+        cid = (case_id or "").strip()
+        mid = (meeting_id or "").strip()
+        if not cid or not mid:
+            return {"success": False, "error": "case_id and meeting_id required"}
+        payload = {"data": {"type": "Meetings", "id": mid}}
+        rel = self._make_request("POST", f"module/Cases/{cid}/relationships/meetings", json=payload)
+        if rel.get("success"):
+            return rel
+        rel2 = self._make_request("POST", f"module/Meetings/{mid}/relationships/cases", json={"data": {"type": "Cases", "id": cid}})
+        return rel2
+
+    def create_meeting(
+        self,
+        patient_id: str,
+        subject: str,
+        date_start: str,
+        duration_minutes: int = 30,
+        case_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Schedule an appointment (Meeting), relate it to the Contact, and attach it to a Case.
+
+        Case resolution: explicit ``case_id`` if provided; else first open-related Case for the
+        contact; else a new Case is created so the appointment appears under Cases.
+
+        date_start should be in ISO format (YYYY-MM-DD HH:MM:SS).
+
+        Optional Task: set SUITECRM_CREATE_TASK_WITH_APPOINTMENT=1 to also create a Task.
         """
         # Step 1: Create Meeting (attributes only - API rejects relationships)
-        payload = {
-            "data": {
-                "type": "Meetings",
-                "attributes": {
-                    "name": subject,
-                    "date_start": date_start,
-                    "duration_hours": "0",
-                    "duration_minutes": str(duration_minutes),
-                    "status": "Planned"
-                }
-            }
+        attrs: Dict[str, Any] = {
+            "name": subject,
+            "date_start": date_start,
+            "duration_hours": "0",
+            "duration_minutes": str(duration_minutes),
+            "status": "Planned",
         }
+        uid = self._default_assigned_user_id()
+        if uid:
+            attrs["assigned_user_id"] = uid
+        payload = {"data": {"type": "Meetings", "attributes": attrs}}
         result = self._make_request("POST", "module", json=payload)
         if not result["success"]:
             return result
@@ -265,31 +452,122 @@ class SuiteCRMClient:
         rel_result = self._make_request(
             "POST",
             f"module/Meetings/{meeting_id}/relationships/contacts",
-            json=rel_payload
+            json=rel_payload,
         )
         if not rel_result["success"]:
-            # Meeting created but relationship failed - still return success with meeting_id
-            logger.warning(f"Meeting {meeting_id} created but link to contact {patient_id} failed: {rel_result.get('error')}")
-        return {
+            logger.warning(
+                "Meeting %s created but link to contact %s failed: %s",
+                meeting_id,
+                patient_id,
+                rel_result.get("error"),
+            )
+
+        out: Dict[str, Any] = {
             "success": True,
             "meeting_id": meeting_id,
-            "status": "booked"
+            "status": "booked",
+            "record_type": "Meeting",
+            "suitecrm_meetings": "Activities → Meetings",
+            "contact_linked": rel_result["success"],
         }
+        if not rel_result["success"]:
+            out["warning"] = (
+                "Meeting exists but could not be linked to the contact; "
+                "check patient_id and SuiteCRM API permissions."
+            )
+
+        resolved_case_id: Optional[str] = (case_id or "").strip() or None
+        if resolved_case_id:
+            out["case_id"] = resolved_case_id
+            link = self.link_meeting_to_case(resolved_case_id, meeting_id)
+            if not link.get("success"):
+                logger.warning(
+                    "Could not link meeting %s to case %s: %s",
+                    meeting_id,
+                    resolved_case_id,
+                    link.get("error"),
+                )
+                out["case_link_error"] = link.get("error", "link meeting to case failed")
+            else:
+                out["suitecrm_cases"] = "Cases → open case → Meetings subpanel"
+        else:
+            existing = self.find_case_for_contact(patient_id)
+            if existing:
+                out["case_id"] = existing
+                link = self.link_meeting_to_case(existing, meeting_id)
+                if link.get("success"):
+                    out["suitecrm_cases"] = "Cases → open case → Meetings subpanel"
+                else:
+                    logger.warning(
+                        "Found case %s for contact but meeting link failed: %s",
+                        existing,
+                        link.get("error"),
+                    )
+                    out["case_link_error"] = link.get("error", "link meeting to case failed")
+            else:
+                case_res = self.create_case(
+                    patient_id,
+                    subject,
+                    f"Appointment scheduled for {date_start} (Voice AI). Meeting id: {meeting_id}",
+                    "P3",
+                )
+                if case_res.get("success") and case_res.get("case_id"):
+                    resolved_case_id = case_res["case_id"]
+                    out["case_id"] = resolved_case_id
+                    out["case_created"] = True
+                    link = self.link_meeting_to_case(resolved_case_id, meeting_id)
+                    if link.get("success"):
+                        out["suitecrm_cases"] = "Cases → open case → Meetings subpanel"
+                    else:
+                        out["case_link_error"] = link.get("error", "link meeting to new case failed")
+                        logger.warning(
+                            "Case %s created but meeting link failed: %s",
+                            resolved_case_id,
+                            link.get("error"),
+                        )
+                else:
+                    out["case_error"] = case_res.get("error", "could not create case for appointment")
+                    logger.warning("Appointment booked but no case: %s", out["case_error"])
+
+        also_task = os.getenv("SUITECRM_CREATE_TASK_WITH_APPOINTMENT", "0").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        if also_task:
+            task_res = self.create_task(
+                patient_id,
+                subject,
+                date_start,
+                description=f"Appointment (Meeting id: {meeting_id})",
+            )
+            if task_res.get("success"):
+                out["task_id"] = task_res.get("task_id")
+                out["suitecrm_tasks"] = "Activities → Tasks"
+            else:
+                out["task_error"] = task_res.get("error", "Task creation failed")
+                logger.warning("Meeting booked but Task not created: %s", out["task_error"])
+
+        return out
 
     def create_case(self, patient_id: str, subject: str, description: str, priority: str = "P3") -> Dict[str, Any]:
         """
         Create a Case for a medical issue or triage.
         API rejects relationships in POST - create Case first, then link Contact.
         """
+        attrs: Dict[str, Any] = {
+            "name": subject,
+            "description": description,
+            "priority": priority,
+            "status": "New",
+        }
+        uid = self._default_assigned_user_id()
+        if uid:
+            attrs["assigned_user_id"] = uid
         payload = {
             "data": {
                 "type": "Cases",
-                "attributes": {
-                    "name": subject,
-                    "description": description,
-                    "priority": priority,
-                    "status": "New"
-                }
+                "attributes": attrs,
             }
         }
         result = self._make_request("POST", "module", json=payload)
