@@ -1694,67 +1694,117 @@ async def _get_agent_graph(
                     return t.__name__
                 return None
             
-            if agent_type == "mortgage":
-                # Filter to only mortgage-related tools
-                # Debug: Check tool attributes
-                if tools and len(tools) > 0:
-                    sample_tool = tools[0]
-                    print(f"🔍 Sample tool type: {type(sample_tool)}", flush=True)
-                    print(f"🔍 Sample tool attributes: {[attr for attr in dir(sample_tool) if not attr.startswith('_')][:10]}", flush=True)
-                    if hasattr(sample_tool, 'name'):
-                        print(f"🔍 Sample tool name: {sample_tool.name}", flush=True)
-                
-                # Filter to mortgage tools
-                filtered_tools = []
-                for t in tools:
-                    tool_name = _get_tool_name(t)
-                    if tool_name and tool_name in mortgage_tool_names:
-                        filtered_tools.append(t)
-                        print(f"✅ Found mortgage tool: {tool_name}", flush=True)
-                
-                tools = filtered_tools
-                print(f"🏠 Filtered to {len(tools)} mortgage tools (from {len(_mcp_tools_cache) if _mcp_tools_cache else 0} total tools)", flush=True)
-            
-            elif agent_type == "healthcare":
-                # Filter to only healthcare-related tools
-                if tools and len(tools) > 0:
-                    sample_tool = tools[0]
-                    print(f"🔍 Sample tool type: {type(sample_tool)}", flush=True)
-                    if hasattr(sample_tool, 'name'):
-                        print(f"🔍 Sample tool name: {sample_tool.name}", flush=True)
-                
-                # Filter to healthcare tools
-                filtered_tools = []
-                for t in tools:
-                    tool_name = _get_tool_name(t)
-                    if tool_name and tool_name in healthcare_tool_names:
-                        filtered_tools.append(t)
-                        print(f"✅ Found healthcare tool: {tool_name}", flush=True)
-                
-                tools = filtered_tools
-                print(f"🏥 Filtered to {len(tools)} healthcare tools (from {len(_mcp_tools_cache) if _mcp_tools_cache else 0} total tools)", flush=True)
-            
-            elif agent_type == "hanok_table":
-                filtered_tools = []
-                for t in tools:
-                    tool_name = _get_tool_name(t)
-                    if tool_name and tool_name in hanok_table_tool_names:
-                        filtered_tools.append(t)
-                        print(f"✅ Found hanok_table tool: {tool_name}", flush=True)
-                tools = filtered_tools
-                print(f"🍽️ Filtered to {len(tools)} hanok_table tools (from {len(_mcp_tools_cache) if _mcp_tools_cache else 0} total tools)", flush=True)
-            
-            else:
+            def filter_tools_for_agent(agent_kind: str, available_tools: list) -> list:
+                if agent_kind == "mortgage":
+                    # Filter to only mortgage-related tools
+                    if available_tools:
+                        sample_tool = available_tools[0]
+                        print(f"🔍 Sample tool type: {type(sample_tool)}", flush=True)
+                        print(f"🔍 Sample tool attributes: {[attr for attr in dir(sample_tool) if not attr.startswith('_')][:10]}", flush=True)
+                        if hasattr(sample_tool, 'name'):
+                            print(f"🔍 Sample tool name: {sample_tool.name}", flush=True)
+
+                    filtered_tools = []
+                    for tool in available_tools:
+                        tool_name = _get_tool_name(tool)
+                        if tool_name and tool_name in mortgage_tool_names:
+                            filtered_tools.append(tool)
+                            print(f"✅ Found mortgage tool: {tool_name}", flush=True)
+                    print(
+                        f"🏠 Filtered to {len(filtered_tools)} mortgage tools "
+                        f"(from {len(_mcp_tools_cache) if _mcp_tools_cache else 0} total tools)",
+                        flush=True,
+                    )
+                    return filtered_tools
+
+                if agent_kind == "healthcare":
+                    # Filter to only healthcare-related tools
+                    if available_tools:
+                        sample_tool = available_tools[0]
+                        print(f"🔍 Sample tool type: {type(sample_tool)}", flush=True)
+                        if hasattr(sample_tool, 'name'):
+                            print(f"🔍 Sample tool name: {sample_tool.name}", flush=True)
+
+                    filtered_tools = []
+                    for tool in available_tools:
+                        tool_name = _get_tool_name(tool)
+                        if tool_name and tool_name in healthcare_tool_names:
+                            filtered_tools.append(tool)
+                            print(f"✅ Found healthcare tool: {tool_name}", flush=True)
+                    print(
+                        f"🏥 Filtered to {len(filtered_tools)} healthcare tools "
+                        f"(from {len(_mcp_tools_cache) if _mcp_tools_cache else 0} total tools)",
+                        flush=True,
+                    )
+                    return filtered_tools
+
+                if agent_kind == "hanok_table":
+                    filtered_tools = []
+                    for tool in available_tools:
+                        tool_name = _get_tool_name(tool)
+                        if tool_name and tool_name in hanok_table_tool_names:
+                            filtered_tools.append(tool)
+                            print(f"✅ Found hanok_table tool: {tool_name}", flush=True)
+                    print(
+                        f"🍽️ Filtered to {len(filtered_tools)} hanok_table tools "
+                        f"(from {len(_mcp_tools_cache) if _mcp_tools_cache else 0} total tools)",
+                        flush=True,
+                    )
+                    return filtered_tools
+
                 # Filter to exclude domain-specific tools (keep todo/team/calendar/transfer + shared tools)
                 # Include transfer_to_agent so todo agent can transfer to 2001@FusionPBX when user says "human agent"
                 shared_tool_names = ["web_search", "transfer_to_agent", "get_available_departments"]
                 all_domain_tools = mortgage_tool_names + healthcare_tool_names + hanok_table_tool_names
                 filtered_tools = [
-                    t for t in tools
-                    if (_get_tool_name(t) in shared_tool_names) or (_get_tool_name(t) not in all_domain_tools)
+                    tool for tool in available_tools
+                    if (_get_tool_name(tool) in shared_tool_names) or (_get_tool_name(tool) not in all_domain_tools)
                 ]
-                tools = filtered_tools
-                print(f"📝 Filtered to {len(tools)} todo/team tools (excluded domain-specific, kept shared + transfer)", flush=True)
+                print(
+                    f"📝 Filtered to {len(filtered_tools)} todo/team tools "
+                    f"(excluded domain-specific, kept shared + transfer)",
+                    flush=True,
+                )
+                return filtered_tools
+
+            tools = filter_tools_for_agent(agent_type, tools)
+
+            # Guardrail: don't cache a domain agent with transfer-only tools.
+            # This creates prompt/tool drift (LLM calls domain tools that are unavailable).
+            if agent_type in ["mortgage", "healthcare", "hanok_table"]:
+                filtered_tool_names = {_get_tool_name(t) for t in tools if _get_tool_name(t)}
+                non_transfer_names = filtered_tool_names - set(transfer_tool_names)
+
+                if len(non_transfer_names) == 0:
+                    print(
+                        f"⚠️ {agent_type} agent has only transfer tools. "
+                        "Retrying MCP tool load before graph build.",
+                        flush=True,
+                    )
+                    # Force one retry by clearing cache and reloading MCP tools.
+                    _mcp_tools_cache = None
+                    refreshed_mcp_tools = await _preload_mcp_tools()
+                    refreshed_tools = refreshed_mcp_tools.copy() if refreshed_mcp_tools else []
+                    try:
+                        from .mcps.local_servers.call_transfer import get_transfer_tools
+                        refreshed_tools.extend(get_transfer_tools())
+                    except Exception as transfer_error:
+                        print(f"⚠️ Could not add transfer tools during retry: {transfer_error}", flush=True)
+
+                    tools = filter_tools_for_agent(agent_type, refreshed_tools)
+                    filtered_tool_names = {_get_tool_name(t) for t in tools if _get_tool_name(t)}
+                    non_transfer_names = filtered_tool_names - set(transfer_tool_names)
+                    print(
+                        f"🔁 Post-retry tool check for {agent_type}: "
+                        f"{len(non_transfer_names)} non-transfer tools",
+                        flush=True,
+                    )
+
+                    if len(non_transfer_names) == 0:
+                        raise RuntimeError(
+                            f"No usable {agent_type} domain tools available after MCP reload. "
+                            "Refusing to build transfer-only graph."
+                        )
             
             print(f"🔧 Building {agent_type} agent graph with {len(tools)} tools...", flush=True)
             sys.stdout.flush()
