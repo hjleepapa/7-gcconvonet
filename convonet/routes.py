@@ -20,9 +20,19 @@ except (ImportError, ValueError) as getattr:
 
 from twilio.twiml.voice_response import VoiceResponse, Connect, Gather
 from .state import AgentState
-from .assistant_graph_todo import get_agent, TodoAgent, MortgageAgent, get_mortgage_agent, HealthcareAgent, get_healthcare_agent
+from .assistant_graph_todo import (
+    get_agent,
+    TodoAgent,
+    MortgageAgent,
+    get_mortgage_agent,
+    HealthcareAgent,
+    get_healthcare_agent,
+    HanokTableAgent,
+    get_hanok_table_agent,
+)
 from .mortgage_intent_detection import detect_mortgage_intent
 from .healthcare_intent_detection import detect_healthcare_intent
+from .hanok_table_intent_detection import detect_hanok_table_intent
 from .voice_intent_utils import has_transfer_intent
 from .llm_provider_manager import get_llm_provider_manager, LLMProvider
 from langchain_mcp_adapters.client import MultiServerMCPClient
@@ -1291,7 +1301,7 @@ def preload_mcp_tools_sync():
 async def _get_agent_graph(
     provider: Optional[LLMProvider] = None, 
     user_id: Optional[str] = None,
-    agent_type: str = "todo",  # "todo", "mortgage", or "healthcare"
+    agent_type: str = "todo",  # "todo", "mortgage", "healthcare", or "hanok_table"
     model: Optional[str] = None  # Optional model override (e.g., "claude-3-5-haiku-20241022" for voice)
 ) -> StateGraph:
     """Helper to initialize the agent graph with tools (cached for performance).
@@ -1661,6 +1671,18 @@ async def _get_agent_graph(
                 "save_call_summary",
                 "web_search",
             ] + transfer_tool_names
+
+            hanok_table_tool_names = [
+                "list_menu_items",
+                "get_reservation",
+                "get_reservation_by_code",
+                "search_seating_availability",
+                "create_reservation",
+                "update_reservation_details",
+                "set_reservation_status",
+                "cancel_reservation",
+                "web_search",
+            ] + transfer_tool_names
             
             # Helper function to get tool name
             def _get_tool_name(t):
@@ -1712,11 +1734,21 @@ async def _get_agent_graph(
                 tools = filtered_tools
                 print(f"🏥 Filtered to {len(tools)} healthcare tools (from {len(_mcp_tools_cache) if _mcp_tools_cache else 0} total tools)", flush=True)
             
+            elif agent_type == "hanok_table":
+                filtered_tools = []
+                for t in tools:
+                    tool_name = _get_tool_name(t)
+                    if tool_name and tool_name in hanok_table_tool_names:
+                        filtered_tools.append(t)
+                        print(f"✅ Found hanok_table tool: {tool_name}", flush=True)
+                tools = filtered_tools
+                print(f"🍽️ Filtered to {len(tools)} hanok_table tools (from {len(_mcp_tools_cache) if _mcp_tools_cache else 0} total tools)", flush=True)
+            
             else:
                 # Filter to exclude domain-specific tools (keep todo/team/calendar/transfer + shared tools)
                 # Include transfer_to_agent so todo agent can transfer to 2001@FusionPBX when user says "human agent"
                 shared_tool_names = ["web_search", "transfer_to_agent", "get_available_departments"]
-                all_domain_tools = mortgage_tool_names + healthcare_tool_names
+                all_domain_tools = mortgage_tool_names + healthcare_tool_names + hanok_table_tool_names
                 filtered_tools = [
                     t for t in tools
                     if (_get_tool_name(t) in shared_tool_names) or (_get_tool_name(t) not in all_domain_tools)
@@ -1733,7 +1765,11 @@ async def _get_agent_graph(
                 print(f"✅ Using {len(tools)} tools for agent graph (cached: {len(_mcp_tools_cache)} tools)", flush=True)
                 sys.stdout.flush()
             
-            agent_class_name = {"mortgage": "MortgageAgent", "healthcare": "HealthcareAgent"}.get(agent_type, "TodoAgent")
+            agent_class_name = {
+                "mortgage": "MortgageAgent",
+                "healthcare": "HealthcareAgent",
+                "hanok_table": "HanokTableAgent",
+            }.get(agent_type, "TodoAgent")
             print(f"⏱️ Starting {agent_class_name} initialization (this may take a few seconds)...", flush=True)
             sys.stdout.flush()
             
@@ -1761,6 +1797,8 @@ async def _get_agent_graph(
                         agent_result['agent'] = MortgageAgent(tools=tools, provider=provider, model=current_model)
                     elif agent_type == "healthcare":
                         agent_result['agent'] = HealthcareAgent(tools=tools, provider=provider, model=current_model)
+                    elif agent_type == "hanok_table":
+                        agent_result['agent'] = HanokTableAgent(tools=tools, provider=provider, model=current_model)
                     else:
                         agent_result['agent'] = TodoAgent(tools=tools, provider=provider, model=current_model)
                     
@@ -1821,6 +1859,8 @@ async def _get_agent_graph(
                     fallback_agent = MortgageAgent(tools=[], provider=provider)
                 elif agent_type == "healthcare":
                     fallback_agent = HealthcareAgent(tools=[], provider=provider)
+                elif agent_type == "hanok_table":
+                    fallback_agent = HanokTableAgent(tools=[], provider=provider)
                 else:
                     fallback_agent = TodoAgent(tools=[], provider=provider)
                 _agent_graph_cache = fallback_agent.build_graph()
@@ -1963,6 +2003,7 @@ async def _run_agent_async(
     prompt_text = prompt.strip().lower() if prompt else ""
     has_mortgage_intent = detect_mortgage_intent(prompt)
     has_healthcare_intent = detect_healthcare_intent(prompt)
+    has_hanok_table_intent = detect_hanok_table_intent(prompt)
     
     # Sticky domain context (keeps user in flow after initial intent)
     # Allow explicit todo intent to override sticky context.
@@ -1999,19 +2040,25 @@ async def _run_agent_async(
                 print(f"⚠️ Error clearing agent context from Redis: {e}", flush=True)
 
     # Handle sticky context for mortgage
-    if stored_agent_type == "mortgage" and not has_todo_intent and not has_healthcare_intent:
+    if stored_agent_type == "mortgage" and not has_todo_intent and not has_healthcare_intent and not has_hanok_table_intent:
         if not has_mortgage_intent:
             print(f"🏠 Using sticky mortgage context for user_id {user_id}", flush=True)
         has_mortgage_intent = True
     
     # Handle sticky context for healthcare
-    if stored_agent_type == "healthcare" and not has_todo_intent and not has_mortgage_intent:
+    if stored_agent_type == "healthcare" and not has_todo_intent and not has_mortgage_intent and not has_hanok_table_intent:
         if not has_healthcare_intent:
             print(f"🏥 Using sticky healthcare context for user_id {user_id}", flush=True)
         has_healthcare_intent = True
+
+    # Handle sticky context for Hanok Table (restaurant)
+    if stored_agent_type == "hanok_table" and not has_todo_intent and not has_mortgage_intent and not has_healthcare_intent:
+        if not has_hanok_table_intent:
+            print(f"🍽️ Using sticky hanok_table context for user_id {user_id}", flush=True)
+        has_hanok_table_intent = True
     
     # Clear sticky context if todo intent detected
-    if has_todo_intent and stored_agent_type in ["mortgage", "healthcare"]:
+    if has_todo_intent and stored_agent_type in ["mortgage", "healthcare", "hanok_table"]:
         print(f"📝 Todo intent detected; clearing sticky {stored_agent_type} context for user_id {user_id}", flush=True)
         if user_id and redis_manager.is_available():
             try:
@@ -2019,7 +2066,7 @@ async def _run_agent_async(
             except Exception as e:
                 print(f"⚠️ Error clearing agent context from Redis: {e}", flush=True)
     
-    # Determine agent type (healthcare takes priority over mortgage if both detected)
+    # Determine agent type (healthcare > mortgage > hanok_table > todo)
     if has_healthcare_intent:
         agent_type = "healthcare"
         print(f"🏥 Healthcare intent detected, using HealthcareAgent", flush=True)
@@ -2028,13 +2075,17 @@ async def _run_agent_async(
         agent_type = "mortgage"
         print(f"🏠 Mortgage intent detected, using MortgageAgent", flush=True)
         print(f"🏠 Prompt was: '{prompt}'", flush=True)
+    elif has_hanok_table_intent:
+        agent_type = "hanok_table"
+        print(f"🍽️ Hanok Table intent detected, using HanokTableAgent", flush=True)
+        print(f"🍽️ Prompt was: '{prompt}'", flush=True)
     else:
         agent_type = "todo"
         print(f"📝 Using TodoAgent (default)", flush=True)
         print(f"📝 Prompt was: '{prompt}'", flush=True)
 
     # Persist agent context so short replies stay in domain flow (30 min TTL)
-    if agent_type in ["mortgage", "healthcare"] and user_id and redis_manager.is_available():
+    if agent_type in ["mortgage", "healthcare", "hanok_table"] and user_id and redis_manager.is_available():
         try:
             redis_manager.redis_client.setex(f"agent_type:{user_id}", 1800, agent_type)
         except Exception as e:

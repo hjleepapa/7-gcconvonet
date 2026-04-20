@@ -25,46 +25,179 @@
             <!-- GCP Microservices Overview (text diagram) -->
             <div class="bg-white p-8 rounded-lg shadow-lg mb-8">
                 <h2 class="text-2xl font-semibold mb-6 text-gray-800 text-center">GCP Cloud Run Microservices (v2.convonetai.com)</h2>
-                <div class="border-2 border-gray-200 rounded-lg p-6 bg-gray-50 font-mono text-sm overflow-x-auto">
-                    <pre class="whitespace-pre text-gray-800">┌─────────────────────────────────────────────────────────────────────────────────────────┐
-│  Client (Browser) · v2.convonetai.com                                                       │
-│  /voice_assistant  /call-center  /mortgage_dashboard  /agent-monitor  /tool-execution      │
-└─────────────────────────────────────────────────────────────────────────────────────────┘
-                                        │
-                    path-based routing (Load Balancer / API Gateway)
-                                        │
-    ┌───────────────────┬───────────────────┬───────────────────┬───────────────────┐
-    │ call-center-service│ voice-gateway-    │ agent-llm-service  │ crm-integration-   │
-    │ (FastAPI)          │ service (FastAPI) │ (FastAPI)          │ service (FastAPI)  │
-    │ /, /call-center,   │ /webrtc/ws        │ /agent/process     │ /patient/*,        │
-    │ /voice_assistant,  │ /twilio/*         │ /convonet_todo/*   │ /meeting/create,   │
-    │ /mortgage_dashboard│                   │                    │ /case/create       │
-    │ /agent-monitor,    │ WebSocket +       │ LangGraph,         │ SuiteCRM,          │
-    │ /tool-execution,   │ Twilio webhooks   │ Multi-LLM, MCP      │ Patient/Case/Note  │
-    │ static, doc pages  │ STT→Agent→TTS     │ tools              │                    │
-    └─────────┬─────────┴─────────┬─────────┴─────────┬───────────┴───────────┬───────┘
-              │                   │                   │                       │
-              │                   │  HTTP POST         │                       │
-              │                   │  /agent/process    │                       │
-              │                   └───────────────────┘                       │
-              │                   │                   │                       │
-    ┌─────────▼─────────┐ ┌──────▼──────┐ ┌──────────▼──────────┐ ┌──────────▼──────────┐
-    │ Redis (session,   │ │ Deepgram    │ │ PostgreSQL (Render) │ │ Twilio · FusionPBX  │
-    │ buffer, pub/sub)  │ │ STT / TTS   │ │ users_anthropic,    │ │ (transfer to agent) │
-    │                   │ │             │ │ todos, mortgage     │ │                     │
-    └───────────────────┘ └─────────────┘ └────────────────────┘ └─────────────────────┘</pre>
+                <div class="border-2 border-gray-200 rounded-xl p-6 md:p-8 bg-gradient-to-b from-gray-50 to-white text-gray-800">
+                    <!-- Client layer -->
+                    <div class="rounded-lg border-2 border-slate-300 bg-white shadow-sm px-4 py-4 text-center max-w-4xl mx-auto">
+                        <p class="font-semibold text-slate-800">Client (Browser) · v2.convonetai.com</p>
+                        <p class="text-xs sm:text-sm text-slate-600 mt-2 leading-relaxed">
+                            <code class="text-slate-700">/voice_assistant</code> · <code class="text-slate-700">/call-center</code> · <code class="text-slate-700">/mortgage_dashboard</code> · <code class="text-slate-700">/agent-monitor</code> · <code class="text-slate-700">/tool-execution</code>
+                        </p>
+                    </div>
+                    <div class="flex flex-col items-center py-3 gap-1">
+                        <span class="text-slate-400 text-lg leading-none">↓</span>
+                        <p class="text-xs text-center text-slate-500 max-w-md">Path-based routing (load balancer / API gateway)</p>
+                        <span class="text-slate-400 text-lg leading-none">↓</span>
+                    </div>
+                    <!-- Four services: equal-width columns -->
+                    <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 items-stretch">
+                        <div class="flex flex-col rounded-lg border-2 border-indigo-200 bg-indigo-50/60 p-4 min-h-[220px]">
+                            <h3 class="font-semibold text-indigo-900 text-sm border-b border-indigo-200 pb-2 mb-3">call-center-service</h3>
+                            <p class="text-xs text-indigo-800/90 font-medium mb-2">FastAPI</p>
+                            <ul class="text-xs text-slate-700 space-y-1.5 flex-1">
+                                <li><code class="bg-white/80 px-1 rounded">/</code>, <code class="bg-white/80 px-1 rounded">/call-center</code>, <code class="bg-white/80 px-1 rounded">/voice_assistant</code></li>
+                                <li><code class="bg-white/80 px-1 rounded">/mortgage_dashboard</code>, <code class="bg-white/80 px-1 rounded">/agent-monitor</code></li>
+                                <li><code class="bg-white/80 px-1 rounded">/tool-execution</code>, static &amp; doc pages</li>
+                            </ul>
+                        </div>
+                        <div class="flex flex-col rounded-lg border-2 border-violet-200 bg-violet-50/60 p-4 min-h-[220px]">
+                            <h3 class="font-semibold text-violet-900 text-sm border-b border-violet-200 pb-2 mb-3">voice-gateway-service</h3>
+                            <p class="text-xs text-violet-800/90 font-medium mb-2">FastAPI</p>
+                            <ul class="text-xs text-slate-700 space-y-1.5 flex-1">
+                                <li><code class="bg-white/80 px-1 rounded">/webrtc/ws</code>, <code class="bg-white/80 px-1 rounded">/twilio/*</code></li>
+                                <li>WebSocket + Twilio webhooks</li>
+                                <li>STT → Agent → TTS pipeline</li>
+                            </ul>
+                        </div>
+                        <div class="flex flex-col rounded-lg border-2 border-blue-200 bg-blue-50/60 p-4 min-h-[220px]">
+                            <h3 class="font-semibold text-blue-900 text-sm border-b border-blue-200 pb-2 mb-3">agent-llm-service</h3>
+                            <p class="text-xs text-blue-800/90 font-medium mb-2">FastAPI</p>
+                            <ul class="text-xs text-slate-700 space-y-1.5 flex-1">
+                                <li><code class="bg-white/80 px-1 rounded">/agent/process</code></li>
+                                <li><code class="bg-white/80 px-1 rounded">/convonet_todo/*</code></li>
+                                <li>LangGraph, multi-LLM, MCP tools</li>
+                            </ul>
+                        </div>
+                        <div class="flex flex-col rounded-lg border-2 border-emerald-200 bg-emerald-50/60 p-4 min-h-[220px]">
+                            <h3 class="font-semibold text-emerald-900 text-sm border-b border-emerald-200 pb-2 mb-3">crm-integration-service</h3>
+                            <p class="text-xs text-emerald-800/90 font-medium mb-2">FastAPI</p>
+                            <ul class="text-xs text-slate-700 space-y-1.5 flex-1">
+                                <li><code class="bg-white/80 px-1 rounded">/patient/*</code></li>
+                                <li><code class="bg-white/80 px-1 rounded">/meeting/create</code>, <code class="bg-white/80 px-1 rounded">/case/create</code></li>
+                                <li>SuiteCRM · patient / case / note</li>
+                            </ul>
+                        </div>
+                    </div>
+                    <!-- Voice → LLM callout -->
+                    <div class="mt-5 mb-1 flex justify-center">
+                        <div class="inline-flex flex-wrap items-center justify-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs text-slate-600 shadow-sm">
+                            <span class="font-medium text-violet-700">voice-gateway</span>
+                            <span class="text-slate-400">→</span>
+                            <span class="font-mono text-[11px] text-slate-700">POST /agent/process</span>
+                            <span class="text-slate-400">→</span>
+                            <span class="font-medium text-blue-700">agent-llm</span>
+                        </div>
+                    </div>
+                    <!-- Dependencies -->
+                    <div class="mt-6 pt-6 border-t border-slate-200 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+                        <div class="rounded-lg border border-teal-200 bg-teal-50/50 p-3 text-center">
+                            <p class="text-xs font-semibold text-teal-900">Redis</p>
+                            <p class="text-[11px] text-slate-600 mt-1">Session, buffer, pub/sub</p>
+                        </div>
+                        <div class="rounded-lg border border-amber-200 bg-amber-50/50 p-3 text-center">
+                            <p class="text-xs font-semibold text-amber-900">Deepgram</p>
+                            <p class="text-[11px] text-slate-600 mt-1">STT / TTS</p>
+                        </div>
+                        <div class="rounded-lg border border-sky-200 bg-sky-50/50 p-3 text-center">
+                            <p class="text-xs font-semibold text-sky-900">PostgreSQL (Render)</p>
+                            <p class="text-[11px] text-slate-600 mt-1">users_anthropic, todos, mortgage</p>
+                        </div>
+                        <div class="rounded-lg border border-rose-200 bg-rose-50/50 p-3 text-center">
+                            <p class="text-xs font-semibold text-rose-900">Twilio · FusionPBX</p>
+                            <p class="text-[11px] text-slate-600 mt-1">Transfer to agent</p>
+                        </div>
+                    </div>
                 </div>
             </div>
 
-            <!-- Optional: legacy diagram image if present -->
-            <div class="bg-white p-6 rounded-lg shadow-md mb-8">
-                <h3 class="text-xl font-semibold mb-4 text-gray-800">Reference Diagram (legacy flow)</h3>
-                <div class="border-2 border-gray-200 rounded-lg overflow-hidden">
-                    <img src="{{ url_for('static', filename='assets/img/convonet_flow_diagram.png') }}"
-                         alt="Convonet System Architecture Flow Diagram (legacy)"
-                         class="w-full h-auto">
+            <!-- Current architecture: request / data flow (SVG) -->
+            <div class="bg-white p-6 md:p-8 rounded-lg shadow-md mb-8">
+                <h3 class="text-xl font-semibold mb-2 text-gray-800 text-center">Request &amp; data flow (v2)</h3>
+                <p class="text-sm text-gray-500 text-center mb-6 max-w-2xl mx-auto">How traffic moves across Cloud Run services for voice, dashboards, LLM tools, and CRM—replacing the old single-service diagram.</p>
+                <div class="border-2 border-gray-200 rounded-xl overflow-hidden bg-slate-50/80">
+                    <svg viewBox="0 0 920 560" class="w-full h-auto max-h-[min(70vh,640px)] text-slate-800" xmlns="http://www.w3.org/2000/svg" aria-labelledby="arch-flow-title" role="img">
+                        <title id="arch-flow-title">Convonet v2 data flow: browser to voice-gateway, agent-llm, and backends</title>
+                        <defs>
+                            <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+                                <path d="M0,0 L8,4 L0,8 Z" fill="#64748b"/>
+                            </marker>
+                            <marker id="arrow-accent" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+                                <path d="M0,0 L8,4 L0,8 Z" fill="#6366f1"/>
+                            </marker>
+                        </defs>
+                        <!-- Browser -->
+                        <rect x="330" y="12" width="260" height="48" rx="8" fill="#fff" stroke="#334155" stroke-width="2"/>
+                        <text x="460" y="32" text-anchor="middle" font-size="13" font-weight="600" font-family="system-ui,sans-serif">Browser · v2.convonetai.com</text>
+                        <text x="460" y="48" text-anchor="middle" font-size="10" fill="#475569" font-family="system-ui,sans-serif">Voice UI · Call Center · Dashboards · Docs</text>
+                        <line x1="460" y1="60" x2="460" y2="78" stroke="#94a3b8" stroke-width="2" marker-end="url(#arrow)"/>
+                        <text x="460" y="92" text-anchor="middle" font-size="10" fill="#64748b" font-family="system-ui,sans-serif">path routing</text>
+                        <!-- Branch to voice vs web -->
+                        <line x1="460" y1="98" x2="460" y2="108" stroke="#94a3b8" stroke-width="2"/>
+                        <line x1="200" y1="108" x2="720" y2="108" stroke="#94a3b8" stroke-width="2"/>
+                        <line x1="200" y1="108" x2="200" y2="125" stroke="#94a3b8" stroke-width="2" marker-end="url(#arrow)"/>
+                        <line x1="720" y1="108" x2="720" y2="125" stroke="#94a3b8" stroke-width="2" marker-end="url(#arrow)"/>
+                        <!-- Voice gateway -->
+                        <rect x="95" y="128" width="210" height="88" rx="8" fill="#f5f3ff" stroke="#7c3aed" stroke-width="2"/>
+                        <text x="200" y="152" text-anchor="middle" font-size="12" font-weight="600" fill="#5b21b6" font-family="system-ui,sans-serif">voice-gateway-service</text>
+                        <text x="200" y="170" text-anchor="middle" font-size="10" fill="#4c1d95" font-family="system-ui,sans-serif">WebSocket /webrtc/ws</text>
+                        <text x="200" y="186" text-anchor="middle" font-size="10" fill="#4c1d95" font-family="system-ui,sans-serif">Twilio · PIN · batch STT/TTS</text>
+                        <text x="200" y="204" text-anchor="middle" font-size="9" fill="#6d28d9" font-family="system-ui,sans-serif">POST → agent-llm /agent/process</text>
+                        <!-- Call center -->
+                        <rect x="615" y="128" width="210" height="88" rx="8" fill="#eef2ff" stroke="#4f46e5" stroke-width="2"/>
+                        <text x="720" y="152" text-anchor="middle" font-size="12" font-weight="600" fill="#312e81" font-family="system-ui,sans-serif">call-center-service</text>
+                        <text x="720" y="170" text-anchor="middle" font-size="10" fill="#3730a3" font-family="system-ui,sans-serif">HTML · static · Jinja pages</text>
+                        <text x="720" y="186" text-anchor="middle" font-size="10" fill="#3730a3" font-family="system-ui,sans-serif">Agent Monitor API → Redis</text>
+                        <text x="720" y="204" text-anchor="middle" font-size="9" fill="#4338ca" font-family="system-ui,sans-serif">Browser fetch → agent-llm APIs</text>
+                        <!-- Deepgram + Twilio sidecars -->
+                        <rect x="12" y="138" width="72" height="68" rx="6" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
+                        <text x="48" y="162" text-anchor="middle" font-size="9" font-weight="600" fill="#92400e" font-family="system-ui,sans-serif">Deepgram</text>
+                        <text x="48" y="178" text-anchor="middle" font-size="8" fill="#b45309" font-family="system-ui,sans-serif">STT/TTS</text>
+                        <line x1="84" y1="172" x2="95" y2="172" stroke="#d97706" stroke-width="1.5" marker-end="url(#arrow)"/>
+                        <line x1="95" y1="190" x2="84" y2="190" stroke="#d97706" stroke-width="1.5" marker-end="url(#arrow)"/>
+                        <rect x="12" y="218" width="72" height="44" rx="6" fill="#fff1f2" stroke="#e11d48" stroke-width="1.5"/>
+                        <text x="48" y="240" text-anchor="middle" font-size="9" font-weight="600" fill="#9f1239" font-family="system-ui,sans-serif">Twilio</text>
+                        <text x="48" y="254" text-anchor="middle" font-size="8" fill="#be123c" font-family="system-ui,sans-serif">transfer</text>
+                        <line x1="84" y1="236" x2="130" y2="210" stroke="#e11d48" stroke-width="1.5" marker-end="url(#arrow)"/>
+                        <!-- Agent LLM hub -->
+                        <rect x="310" y="248" width="300" height="100" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="2.5"/>
+                        <text x="460" y="276" text-anchor="middle" font-size="14" font-weight="700" fill="#1e40af" font-family="system-ui,sans-serif">agent-llm-service</text>
+                        <text x="460" y="296" text-anchor="middle" font-size="10" fill="#1d4ed8" font-family="system-ui,sans-serif">LangGraph · Claude / Gemini / OpenAI</text>
+                        <text x="460" y="312" text-anchor="middle" font-size="10" fill="#1d4ed8" font-family="system-ui,sans-serif">Intent routing · Todo / Mortgage / Healthcare</text>
+                        <text x="460" y="330" text-anchor="middle" font-size="10" fill="#1d4ed8" font-family="system-ui,sans-serif">MCP subprocesses (stdio)</text>
+                        <!-- Arrows into agent -->
+                        <line x1="305" y1="216" x2="360" y2="248" stroke="#6366f1" stroke-width="2" marker-end="url(#arrow-accent)"/>
+                        <line x1="615" y1="216" x2="520" y2="248" stroke="#6366f1" stroke-width="2" marker-end="url(#arrow-accent)"/>
+                        <!-- CRM integration -->
+                        <rect x="640" y="258" width="168" height="80" rx="8" fill="#ecfdf5" stroke="#059669" stroke-width="2"/>
+                        <text x="724" y="282" text-anchor="middle" font-size="11" font-weight="600" fill="#065f46" font-family="system-ui,sans-serif">crm-integration</text>
+                        <text x="724" y="300" text-anchor="middle" font-size="9" fill="#047857" font-family="system-ui,sans-serif">SuiteCRM REST</text>
+                        <text x="724" y="316" text-anchor="middle" font-size="9" fill="#047857" font-family="system-ui,sans-serif">patient · meeting · case</text>
+                        <line x1="610" y1="298" x2="640" y2="298" stroke="#059669" stroke-width="2" marker-end="url(#arrow)"/>
+                        <text x="575" y="294" text-anchor="middle" font-size="8" fill="#64748b" font-family="system-ui,sans-serif">HTTP</text>
+                        <!-- Bottom row: data stores -->
+                        <line x1="360" y1="348" x2="320" y2="388" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrow)"/>
+                        <line x1="460" y1="348" x2="460" y2="388" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrow)"/>
+                        <line x1="560" y1="348" x2="600" y2="388" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrow)"/>
+                        <rect x="248" y="392" width="144" height="56" rx="6" fill="#f0fdfa" stroke="#0d9488" stroke-width="1.5"/>
+                        <text x="320" y="416" text-anchor="middle" font-size="10" font-weight="600" fill="#115e59" font-family="system-ui,sans-serif">Redis</text>
+                        <text x="320" y="432" text-anchor="middle" font-size="9" fill="#0f766e" font-family="system-ui,sans-serif">sessions · Agent Monitor</text>
+                        <rect x="388" y="392" width="144" height="56" rx="6" fill="#f0f9ff" stroke="#0284c7" stroke-width="1.5"/>
+                        <text x="460" y="416" text-anchor="middle" font-size="10" font-weight="600" fill="#0c4a6e" font-family="system-ui,sans-serif">PostgreSQL</text>
+                        <text x="460" y="432" text-anchor="middle" font-size="9" fill="#0369a1" font-family="system-ui,sans-serif">users · todos · mortgage</text>
+                        <rect x="528" y="392" width="144" height="56" rx="6" fill="#fff7ed" stroke="#ea580c" stroke-width="1.5"/>
+                        <text x="600" y="416" text-anchor="middle" font-size="10" font-weight="600" fill="#9a3412" font-family="system-ui,sans-serif">External APIs</text>
+                        <text x="600" y="432" text-anchor="middle" font-size="9" fill="#c2410c" font-family="system-ui,sans-serif">MCP tools · calendars · search</text>
+                        <!-- SuiteCRM cloud -->
+                        <rect x="688" y="392" width="200" height="56" rx="6" fill="#f8fafc" stroke="#475569" stroke-width="1.5" stroke-dasharray="4 3"/>
+                        <text x="788" y="416" text-anchor="middle" font-size="10" font-weight="600" fill="#334155" font-family="system-ui,sans-serif">SuiteCRM (external)</text>
+                        <text x="788" y="432" text-anchor="middle" font-size="9" fill="#64748b" font-family="system-ui,sans-serif">via crm-integration only</text>
+                        <line x1="724" y1="338" x2="788" y2="392" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+                        <!-- Legend strip -->
+                        <rect x="24" y="480" width="872" height="64" rx="8" fill="#fff" stroke="#e2e8f0" stroke-width="1"/>
+                        <text x="460" y="502" text-anchor="middle" font-size="11" font-weight="600" fill="#334155" font-family="system-ui,sans-serif">Legend</text>
+                        <text x="460" y="520" text-anchor="middle" font-size="9" fill="#64748b" font-family="system-ui,sans-serif">Violet arrows: HTTP to agent-llm · Green: optional MCP→crm-integration path (or direct SuiteCRM from MCP)</text>
+                        <text x="460" y="534" text-anchor="middle" font-size="9" fill="#64748b" font-family="system-ui,sans-serif">Voice path: bidirectional WebSocket; one turn = STT → LLM → TTS streamed back to the browser</text>
+                    </svg>
                 </div>
-                <p class="text-sm text-gray-500 mt-2">Above: current GCP/FastAPI layout. Image: legacy monolith reference; logic now split across voice-gateway, agent-llm, call-center, crm-integration.</p>
             </div>
 
             <!-- Color Legend -->

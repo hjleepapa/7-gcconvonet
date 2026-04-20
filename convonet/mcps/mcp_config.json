@@ -60,6 +60,19 @@
         "SUITECRM_USE_CRM_INTEGRATION": "${SUITECRM_USE_CRM_INTEGRATION}",
         "PYTHONPATH": "."
       }
+    },
+    "hanok_table": {
+      "command": "python",
+      "args": [
+        "convonet/mcps/local_servers/db_hanok_table.py"
+      ],
+      "transport": "stdio",
+      "env": {
+        "DB_URI": "${DB_URI}",
+        "HANOK_MCP_API_BASE_URL": "${HANOK_MCP_API_BASE_URL}",
+        "HANOK_PUBLIC_BASE_URL": "${HANOK_PUBLIC_BASE_URL}",
+        "PYTHONPATH": "."
+      }
     }
   }
 }

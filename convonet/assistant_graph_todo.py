@@ -17,6 +17,7 @@ from .state import AgentState
 from .mcps.local_servers.db_todo import TodoPriority, ReminderImportance
 from .llm_provider_manager import get_llm_provider_manager, LLMProvider
 from .mortgage_prompts import MORTGAGE_SYSTEM_PROMPT
+from .hanok_table_prompts import HANOK_TABLE_SYSTEM_PROMPT
 # Optional Composio imports - app should work without them
 try:
     from .composio_tools import get_all_integration_tools, test_composio_connection
@@ -1314,6 +1315,34 @@ def get_healthcare_agent(tools: List[BaseTool] = [], provider: Optional[LLMProvi
         HealthcareAgent instance
     """
     return HealthcareAgent(tools=tools, provider=provider, model=model)
+
+
+class HanokTableAgent(TodoAgent):
+    """Restaurant reservations (Hanok Table / kfood) — LangGraph agent with reservation MCP tools."""
+
+    def __init__(
+        self,
+        name: str = "Hanok Table Host",
+        model: str = None,
+        provider: Optional[LLMProvider] = None,
+        tools: List[BaseTool] = [],
+        system_prompt: str = HANOK_TABLE_SYSTEM_PROMPT,
+    ) -> None:
+        super().__init__(
+            name=name,
+            model=model,
+            provider=provider,
+            tools=tools,
+            system_prompt=system_prompt,
+        )
+
+
+def get_hanok_table_agent(
+    tools: List[BaseTool] = [],
+    provider: Optional[LLMProvider] = None,
+    model: str = None,
+) -> HanokTableAgent:
+    return HanokTableAgent(tools=tools, provider=provider, model=model)
 
 
 # For backwards compatibility
