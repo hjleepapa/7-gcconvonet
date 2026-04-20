@@ -1,0 +1,1272 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Reservations · Hanok Table Admin</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --ink: #1a1210;
+        --paper: #f7f3ed;
+        --cream: #e8e0d4;
+        --gochujang: #b83c2d;
+        --muted: #5c534c;
+        --ok: #2d6a4f;
+        --warn: #bc6c25;
+        --bad: #9b2226;
+      }
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        font-family: "DM Sans", system-ui, sans-serif;
+        background: var(--paper);
+        color: var(--ink);
+        line-height: 1.5;
+        min-height: 100vh;
+      }
+      .top {
+        background: linear-gradient(120deg, #8c2a20, var(--gochujang));
+        color: #fff;
+        padding: 1.25rem 1.5rem;
+      }
+      .top-inner {
+        max-width: 1100px;
+        margin: 0 auto;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+      }
+      .top h1 {
+        font-size: 1.25rem;
+        font-weight: 700;
+      }
+      .top p {
+        font-size: 0.85rem;
+        opacity: 0.92;
+      }
+      .top a {
+        color: #fff;
+        text-decoration: underline;
+        font-weight: 600;
+        font-size: 0.9rem;
+      }
+      .wrap {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 1.25rem 1rem 2.5rem;
+      }
+      .meta {
+        font-size: 0.85rem;
+        color: var(--muted);
+        margin-bottom: 1rem;
+      }
+      .cal-toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        margin-bottom: 1rem;
+      }
+      .cal-view-tabs {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.35rem;
+        background: #fff;
+        border: 1px solid var(--cream);
+        border-radius: 10px;
+        padding: 4px;
+        box-shadow: 0 2px 8px rgba(26, 18, 16, 0.06);
+      }
+      .cal-view-tabs button {
+        border: none;
+        background: transparent;
+        color: var(--muted);
+        font-family: inherit;
+        font-size: 0.78rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        padding: 0.45rem 0.75rem;
+        border-radius: 7px;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .cal-view-tabs button[aria-selected="true"] {
+        background: var(--gochujang);
+        color: #fff;
+      }
+      .cal-view-tabs button[aria-selected="false"]:hover {
+        background: var(--cream);
+        color: var(--ink);
+      }
+      .cal-nav {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+      }
+      .cal-nav button {
+        border: 1px solid var(--cream);
+        background: #fff;
+        color: var(--ink);
+        width: 2.25rem;
+        height: 2.25rem;
+        border-radius: 8px;
+        font-size: 1.1rem;
+        cursor: pointer;
+        font-weight: 600;
+        line-height: 1;
+      }
+      .cal-nav button:hover {
+        background: #fffdf9;
+        border-color: var(--gochujang);
+        color: var(--gochujang);
+      }
+      #cal-month-label {
+        font-weight: 700;
+        font-size: 1.05rem;
+        min-width: 11rem;
+        text-align: center;
+      }
+      .cal-grid {
+        display: grid;
+        grid-template-columns: repeat(7, 1fr);
+        gap: 4px;
+        background: var(--cream);
+        padding: 4px;
+        border-radius: 14px;
+        border: 1px solid var(--cream);
+        box-shadow: 0 8px 32px rgba(26, 18, 16, 0.08);
+      }
+      .cal-grid.cal-grid--week .cal-cell {
+        min-height: 12rem;
+      }
+      .day-view {
+        background: #fff;
+        border-radius: 14px;
+        border: 1px solid var(--cream);
+        box-shadow: 0 8px 32px rgba(26, 18, 16, 0.08);
+        overflow: hidden;
+      }
+      .day-view-head {
+        padding: 0.85rem 1rem;
+        background: #faf7f2;
+        border-bottom: 1px solid var(--cream);
+        font-weight: 700;
+        font-size: 0.95rem;
+        color: var(--ink);
+      }
+      .day-view-body {
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+      }
+      .day-section {
+        background: #fffdf9;
+        border-radius: 12px;
+        border: 1px solid var(--cream);
+        overflow: hidden;
+      }
+      .day-section--waitlist {
+        border-color: rgba(188, 108, 37, 0.35);
+        background: linear-gradient(180deg, #fff9f2 0%, #fffdf9 100%);
+      }
+      .day-section-title {
+        font-size: 0.82rem;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.07em;
+        color: var(--ink);
+        padding: 0.65rem 1rem 0.15rem;
+        margin: 0;
+      }
+      .day-section-hint {
+        font-size: 0.72rem;
+        color: var(--muted);
+        padding: 0 1rem 0.5rem;
+        margin: 0;
+        line-height: 1.4;
+      }
+      .day-view-list {
+        padding: 0.65rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+        max-height: min(50vh, 380px);
+        overflow-y: auto;
+      }
+      .day-section--waitlist .day-view-list {
+        max-height: min(40vh, 320px);
+      }
+      .day-queue-pos {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 1.75rem;
+        height: 1.5rem;
+        padding: 0 0.35rem;
+        border-radius: 6px;
+        font-size: 0.72rem;
+        font-weight: 800;
+        background: var(--cream);
+        color: var(--ink);
+        margin-right: 0.35rem;
+        vertical-align: middle;
+      }
+      .badge-vip-wl {
+        background: linear-gradient(135deg, #7c5c1a, #b8860b);
+        color: #fff;
+        font-size: 0.65rem;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        padding: 0.15rem 0.4rem;
+        border-radius: 5px;
+        margin-left: 0.35rem;
+      }
+      .day-slot {
+        display: grid;
+        grid-template-columns: 4.5rem 1fr;
+        gap: 0.65rem;
+        align-items: start;
+        padding: 0.65rem 0.75rem;
+        border-radius: 10px;
+        border: 1px solid var(--cream);
+        background: #fffdf9;
+      }
+      .day-slot time {
+        font-size: 0.8rem;
+        font-weight: 700;
+        color: var(--gochujang);
+        white-space: nowrap;
+      }
+      .day-slot .day-slot-body {
+        min-width: 0;
+      }
+      .day-slot .day-slot-title {
+        font-weight: 700;
+        font-size: 0.88rem;
+        margin-bottom: 0.2rem;
+      }
+      .day-slot .day-slot-meta {
+        font-size: 0.78rem;
+        color: var(--muted);
+      }
+      .day-slot-empty {
+        padding: 2.5rem 1rem;
+        text-align: center;
+        color: var(--muted);
+        font-size: 0.9rem;
+      }
+      .cal-dow {
+        text-align: center;
+        font-size: 0.65rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+        padding: 0.4rem 0;
+        background: #faf7f2;
+      }
+      .cal-cell {
+        min-height: 5.5rem;
+        background: #fff;
+        border-radius: 10px;
+        padding: 0.35rem 0.4rem;
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 2px;
+        overflow: hidden;
+      }
+      .cal-cell.other-month {
+        background: #f3eee6;
+        opacity: 0.72;
+      }
+      .cal-cell.today {
+        box-shadow: inset 0 0 0 2px var(--gochujang);
+      }
+      .cal-day-num {
+        font-size: 0.75rem;
+        font-weight: 700;
+        color: var(--muted);
+        flex-shrink: 0;
+      }
+      .cal-cell.other-month .cal-day-num {
+        color: #a8a098;
+      }
+      .cal-events {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        overflow: hidden;
+        flex: 1;
+      }
+      .cal-chip {
+        border: none;
+        text-align: left;
+        cursor: pointer;
+        font-family: inherit;
+        font-size: 0.62rem;
+        line-height: 1.2;
+        padding: 0.22rem 0.28rem;
+        border-radius: 5px;
+        background: #f0ebe3;
+        color: var(--ink);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        width: 100%;
+      }
+      .cal-chip:hover {
+        background: #ffe8e0;
+        color: var(--gochujang);
+      }
+      .cal-chip small {
+        font-weight: 700;
+        opacity: 0.85;
+      }
+      .badge {
+        display: inline-block;
+        padding: 0.2rem 0.55rem;
+        border-radius: 999px;
+        font-size: 0.72rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      .badge-confirmed {
+        background: #d8f3dc;
+        color: var(--ok);
+      }
+      .badge-pending {
+        background: #ffe5d0;
+        color: var(--warn);
+      }
+      .badge-seated {
+        background: #caf0f8;
+        color: #0077b6;
+      }
+      .badge-completed {
+        background: #e2eafc;
+        color: #1d3557;
+      }
+      .badge-cancelled {
+        background: #ffddd2;
+        color: var(--bad);
+      }
+      .badge-waitlist {
+        background: #fff3bf;
+        color: #8a6d00;
+      }
+      .badge-allocated {
+        background: #ccf5e7;
+        color: #0b6b4a;
+      }
+      .badge-seat-na {
+        background: #f1f3f5;
+        color: var(--muted);
+      }
+      .empty {
+        padding: 3rem;
+        text-align: center;
+        color: var(--muted);
+        background: #fff;
+        border-radius: 12px;
+        border: 1px dashed var(--cream);
+      }
+      /* Detail overlay — zoom-in */
+      .overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(26, 18, 16, 0.45);
+        backdrop-filter: blur(4px);
+        z-index: 100;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 1rem;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.2s ease;
+      }
+      .overlay.open {
+        opacity: 1;
+        pointer-events: auto;
+      }
+      .detail-card {
+        background: #fffef9;
+        border-radius: 16px;
+        border: 1px solid var(--cream);
+        box-shadow: 0 24px 64px rgba(26, 18, 16, 0.2);
+        max-width: 28rem;
+        width: 100%;
+        max-height: min(90vh, 640px);
+        overflow-y: auto;
+        padding: 1.35rem 1.4rem 1.5rem;
+        transform: scale(0.92);
+        opacity: 0;
+        transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.22s ease;
+      }
+      .overlay.open .detail-card {
+        transform: scale(1);
+        opacity: 1;
+      }
+      .detail-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 0.75rem;
+        margin-bottom: 1rem;
+        padding-bottom: 0.85rem;
+        border-bottom: 1px solid var(--cream);
+      }
+      .detail-head h2 {
+        font-size: 1.05rem;
+        font-weight: 700;
+      }
+      .detail-close {
+        border: none;
+        background: var(--cream);
+        width: 2rem;
+        height: 2rem;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 1.25rem;
+        line-height: 1;
+        color: var(--ink);
+        flex-shrink: 0;
+      }
+      .detail-close:hover {
+        background: #ddd4c8;
+      }
+      .detail-rows {
+        display: grid;
+        gap: 0.65rem;
+        font-size: 0.88rem;
+      }
+      .detail-row {
+        display: grid;
+        grid-template-columns: 7.5rem 1fr;
+        gap: 0.5rem;
+        align-items: start;
+      }
+      .detail-row span:first-child {
+        font-size: 0.72rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--muted);
+      }
+      code {
+        font-family: ui-monospace, monospace;
+        font-size: 0.82rem;
+        background: var(--cream);
+        padding: 0.12rem 0.35rem;
+        border-radius: 4px;
+      }
+      .food-lines {
+        margin-top: 0.35rem;
+        font-size: 0.82rem;
+      }
+      .food-lines li {
+        margin-left: 1.1rem;
+        margin-bottom: 0.2rem;
+      }
+      @media (max-width: 720px) {
+        .cal-cell {
+          min-height: 4.25rem;
+        }
+        .cal-chip {
+          font-size: 0.58rem;
+        }
+        .detail-row {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="top">
+      <div class="top-inner">
+        <div>
+          <h1>Hanok Table — Reservations</h1>
+          <p>Day, week, or month ({{ calendar_tz_label | default("Pacific (PT)", true) }}) · Times shown in your restaurant timezone · Select a booking for details</p>
+        </div>
+        <a href="/">← Restaurant site</a>
+      </div>
+    </header>
+    <div class="wrap">
+      <p class="meta">
+        {{ row_count }} active reservation{% if row_count != 1 %}s{% endif %} on the calendar.
+        {% if cancelled_hidden and cancelled_hidden > 0 %}<strong>{{ cancelled_hidden }} cancelled</strong> (hidden from calendar — cancel did run).{% endif %}
+        With table allocation enabled, month/week chips use <strong>· WL</strong> (waitlist, no table yet) or <strong>· T</strong> (table assigned). <strong>Day view</strong> separates <strong>Reservations</strong> from a <strong>Waitlist</strong> queue ordered like promotion (VIP tier and pre-order threshold, then booking time).
+        API: <code>GET /api/reservations</code>
+      </p>
+      {% if row_count == 0 %}
+      <div class="empty">
+        {% if cancelled_hidden and cancelled_hidden > 0 %}
+          No active reservations on the calendar ({{ cancelled_hidden }} cancelled).
+        {% else %}
+          No rows yet. Redeploy triggers demo seed when the table is empty.
+        {% endif %}
+      </div>
+      {% else %}
+      <div class="cal-toolbar">
+        <div class="cal-view-tabs" role="tablist" aria-label="Calendar scope">
+          <button type="button" role="tab" id="view-day" aria-controls="cal-mount" aria-selected="false">Day</button>
+          <button type="button" role="tab" id="view-week" aria-controls="cal-mount" aria-selected="false">Week</button>
+          <button type="button" role="tab" id="view-month" aria-controls="cal-mount" aria-selected="false">Month</button>
+        </div>
+        <div class="cal-nav">
+          <button type="button" id="cal-prev" aria-label="Previous">‹</button>
+          <div id="cal-month-label"></div>
+          <button type="button" id="cal-next" aria-label="Next">›</button>
+        </div>
+        <button type="button" class="cal-nav" id="cal-today" style="border: 1px solid var(--cream); background: #fff; border-radius: 8px; padding: 0.45rem 0.85rem; font-weight: 600; cursor: pointer; font-family: inherit; font-size: 0.85rem">Today</button>
+      </div>
+      <div id="cal-mount">
+        <div class="cal-grid cal-grid--month" id="cal-grid" role="grid" aria-label="Reservation calendar"></div>
+        <div class="day-view" id="day-view" hidden>
+          <div class="day-view-head" id="day-view-head"></div>
+          <div class="day-view-body">
+            <section class="day-section" id="day-section-booked" aria-labelledby="day-booked-title">
+              <h2 class="day-section-title" id="day-booked-title">Reservations</h2>
+              <p class="day-section-hint">Bookings with a table, seating n/a, or not on the waitlist (by time).</p>
+              <div class="day-view-list" id="day-view-booked"></div>
+            </section>
+            <section class="day-section day-section--waitlist" id="day-section-waitlist" aria-labelledby="day-wl-title" hidden>
+              <h2 class="day-section-title" id="day-wl-title">Waitlist</h2>
+              <p class="day-section-hint">
+                Queue order matches table promotion: same start time &amp; stay length together; then VIP tier ahead of standard (explicit VIP or pre-order total at/above <code>HANOK_VIP_PREORDER_CENTS</code>); then earlier bookings first.
+              </p>
+              <div class="day-view-list" id="day-view-waitlist"></div>
+            </section>
+          </div>
+        </div>
+      </div>
+      {% endif %}
+    </div>
+
+    <div class="overlay" id="detail-overlay" aria-hidden="true">
+      <div class="detail-card" id="detail-card" role="dialog" aria-modal="true" aria-labelledby="detail-title">
+        <div class="detail-head">
+          <h2 id="detail-title">Reservation</h2>
+          <button type="button" class="detail-close" id="detail-close" aria-label="Close">×</button>
+        </div>
+        <div class="detail-rows" id="detail-body"></div>
+      </div>
+    </div>
+
+    <script id="admin-res-data" type="application/json">{{ reservations_json | safe }}</script>
+    <script id="admin-cal-tz" type="application/json">{{ calendar_display_tz | default("America/Los_Angeles", true) | tojson }}</script>
+    <script id="admin-vip-threshold" type="application/json">{{ vip_preorder_threshold_cents | default(50000, true) | tojson }}</script>
+    <script>
+      (function () {
+        var rawTz = document.getElementById("admin-cal-tz");
+        var DISPLAY_TZ = "America/Los_Angeles";
+        try {
+          DISPLAY_TZ = JSON.parse(rawTz ? rawTz.textContent : '"America/Los_Angeles"');
+        } catch (e) {}
+        var raw = document.getElementById("admin-res-data");
+        var reservations = [];
+        try {
+          reservations = JSON.parse(raw ? raw.textContent : "[]");
+        } catch (e) {
+          reservations = [];
+        }
+
+        var monthNames = [
+          "January",
+          "February",
+          "March",
+          "April",
+          "May",
+          "June",
+          "July",
+          "August",
+          "September",
+          "October",
+          "November",
+          "December",
+        ];
+        var monthNamesShort = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+        var weekdayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+        function dayBucketKey(iso) {
+          if (!iso) return "";
+          var d = new Date(iso);
+          if (isNaN(d.getTime())) return "";
+          return d.toLocaleDateString("en-CA", { timeZone: DISPLAY_TZ });
+        }
+
+        function timeStr(iso) {
+          if (!iso) return "";
+          var d = new Date(iso);
+          if (isNaN(d.getTime())) return "";
+          return (
+            d.toLocaleTimeString("en-US", {
+              timeZone: DISPLAY_TZ,
+              hour: "numeric",
+              minute: "2-digit",
+            }) + " PT"
+          );
+        }
+
+        function badgeClass(s) {
+          if (s === "confirmed") return "badge-confirmed";
+          if (s === "pending") return "badge-pending";
+          if (s === "seated") return "badge-seated";
+          if (s === "completed") return "badge-completed";
+          return "badge-cancelled";
+        }
+
+        function seatingBadgeClass(seating) {
+          if (seating === "waitlist") return "badge-waitlist";
+          if (seating === "allocated") return "badge-allocated";
+          return "badge-seat-na";
+        }
+
+        function seatingChipSuffix(r) {
+          var s = r.seating_status || "";
+          if (s === "waitlist") return " · WL";
+          if (s === "allocated") return " · T";
+          return "";
+        }
+
+        function seatingDayListBadge(r) {
+          var s = r.seating_status || "";
+          var label = "";
+          var cls = seatingBadgeClass(s);
+          if (s === "waitlist") label = "waitlist";
+          else if (s === "allocated") label = "table assigned";
+          else if (s === "not_applicable") label = "seating n/a";
+          else label = s || "—";
+          return (
+            ' · <span class="badge ' +
+            cls +
+            '" title="HANOK_TABLE_ALLOCATION_ENABLED — waitlist vs allocated">' +
+            escapeHtml(label) +
+            "</span>"
+          );
+        }
+
+        function money(c) {
+          return "$" + (c / 100).toFixed(2);
+        }
+
+        var VIP_PREORDER_MIN_CENTS = 50000;
+        try {
+          var thrEl = document.getElementById("admin-vip-threshold");
+          if (thrEl && thrEl.textContent) {
+            var t = JSON.parse(thrEl.textContent);
+            if (typeof t === "number" && t >= 0) VIP_PREORDER_MIN_CENTS = t;
+          }
+        } catch (e) {}
+
+        function effectiveVipTier(r) {
+          var gp = (r.guest_priority || "normal").toLowerCase();
+          if (gp === "vip") return true;
+          var c = parseInt(r.food_total_cents, 10) || 0;
+          return c >= VIP_PREORDER_MIN_CENTS;
+        }
+
+        function waitlistSortCompare(a, b) {
+          var ta = new Date(a.starts_at).getTime();
+          var tb = new Date(b.starts_at).getTime();
+          if (ta !== tb) return ta - tb;
+          var da = parseInt(a.duration_minutes, 10);
+          if (isNaN(da)) da = 120;
+          var db = parseInt(b.duration_minutes, 10);
+          if (isNaN(db)) db = 120;
+          if (da !== db) return da - db;
+          var va = effectiveVipTier(a) ? 0 : 1;
+          var vb = effectiveVipTier(b) ? 0 : 1;
+          if (va !== vb) return va - vb;
+          var ca = rCreatedMs(a);
+          var cb = rCreatedMs(b);
+          return ca - cb;
+        }
+
+        function rCreatedMs(r) {
+          if (!r.created_at) return 0;
+          var t = new Date(r.created_at).getTime();
+          return isNaN(t) ? 0 : t;
+        }
+
+        var byDay = {};
+        reservations.forEach(function (r) {
+          var k = dayBucketKey(r.starts_at);
+          if (!k) return;
+          if (!byDay[k]) byDay[k] = [];
+          byDay[k].push(r);
+        });
+        Object.keys(byDay).forEach(function (k) {
+          byDay[k].sort(function (a, b) {
+            return new Date(a.starts_at) - new Date(b.starts_at);
+          });
+        });
+
+        function wallDatePartsInTz(date, tz) {
+          var fmt = new Intl.DateTimeFormat("en-US", {
+            timeZone: tz,
+            year: "numeric",
+            month: "numeric",
+            day: "numeric",
+          });
+          var y,
+            m,
+            d,
+            ok = false;
+          fmt.formatToParts(date).forEach(function (p) {
+            if (p.type === "year") {
+              y = parseInt(p.value, 10);
+              ok = true;
+            }
+            if (p.type === "month") m = parseInt(p.value, 10) - 1;
+            if (p.type === "day") d = parseInt(p.value, 10);
+          });
+          return ok ? { y: y, m: m, d: d } : { y: 1970, m: 0, d: 1 };
+        }
+
+        function todayCursor() {
+          return wallDatePartsInTz(new Date(), DISPLAY_TZ);
+        }
+
+        function pad(n) {
+          return n < 10 ? "0" + n : String(n);
+        }
+
+        function ymd(y, m, d) {
+          return y + "-" + pad(m + 1) + "-" + pad(d);
+        }
+
+        function addDaysUTC(cy, cm, cd, delta) {
+          var dt = new Date(Date.UTC(cy, cm, cd + delta));
+          return { y: dt.getUTCFullYear(), m: dt.getUTCMonth(), d: dt.getUTCDate() };
+        }
+
+        function addMonthsUTC(cy, cm, cd, delta) {
+          var first = new Date(Date.UTC(cy, cm + delta, 1));
+          var ny = first.getUTCFullYear();
+          var nm = first.getUTCMonth();
+          var dim = new Date(Date.UTC(ny, nm + 1, 0)).getUTCDate();
+          var dd = Math.min(cd, dim);
+          return { y: ny, m: nm, d: dd };
+        }
+
+        function startOfWeekUTC(cy, cm, cd) {
+          var dt = new Date(Date.UTC(cy, cm, cd));
+          var dow = dt.getUTCDay();
+          return addDaysUTC(cy, cm, cd, -dow);
+        }
+
+        var CAL_VIEW_STORAGE_KEY = "hanok_admin_calendar_view";
+        var CAL_CURSOR_STORAGE_KEY = "hanok_admin_calendar_cursor";
+
+        function loadSavedViewMode() {
+          try {
+            var v = localStorage.getItem(CAL_VIEW_STORAGE_KEY);
+            if (v === "day" || v === "week" || v === "month") return v;
+          } catch (e) {}
+          return "month";
+        }
+
+        function saveViewMode(mode) {
+          try {
+            localStorage.setItem(CAL_VIEW_STORAGE_KEY, mode);
+          } catch (e) {}
+        }
+
+        function loadSavedCursor() {
+          try {
+            var raw = localStorage.getItem(CAL_CURSOR_STORAGE_KEY);
+            if (!raw) return null;
+            var o = JSON.parse(raw);
+            if (typeof o.y !== "number" || typeof o.m !== "number" || typeof o.d !== "number") return null;
+            if (o.m < 0 || o.m > 11 || o.d < 1 || o.d > 31) return null;
+            var dt = new Date(Date.UTC(o.y, o.m, o.d));
+            if (dt.getUTCFullYear() !== o.y || dt.getUTCMonth() !== o.m || dt.getUTCDate() !== o.d) return null;
+            return { y: o.y, m: o.m, d: o.d };
+          } catch (e) {
+            return null;
+          }
+        }
+
+        function saveCursor(c) {
+          try {
+            localStorage.setItem(CAL_CURSOR_STORAGE_KEY, JSON.stringify({ y: c.y, m: c.m, d: c.d }));
+          } catch (e) {}
+        }
+
+        var viewMode = loadSavedViewMode();
+        var cursor = loadSavedCursor() || todayCursor();
+
+        var grid = document.getElementById("cal-grid");
+        var dayView = document.getElementById("day-view");
+        var dayViewHead = document.getElementById("day-view-head");
+        var dayViewBooked = document.getElementById("day-view-booked");
+        var dayViewWaitlist = document.getElementById("day-view-waitlist");
+        var daySectionWaitlist = document.getElementById("day-section-waitlist");
+        var labelEl = document.getElementById("cal-month-label");
+        var btnPrev = document.getElementById("cal-prev");
+        var btnNext = document.getElementById("cal-next");
+        var btnToday = document.getElementById("cal-today");
+        var tabDay = document.getElementById("view-day");
+        var tabWeek = document.getElementById("view-week");
+        var tabMonth = document.getElementById("view-month");
+        var overlay = document.getElementById("detail-overlay");
+        var detailBody = document.getElementById("detail-body");
+        var detailTitle = document.getElementById("detail-title");
+
+        if (!grid || !labelEl || !dayView || !dayViewHead || !dayViewBooked || !dayViewWaitlist || !daySectionWaitlist) return;
+
+        function syncTabs() {
+          tabDay.setAttribute("aria-selected", viewMode === "day" ? "true" : "false");
+          tabWeek.setAttribute("aria-selected", viewMode === "week" ? "true" : "false");
+          tabMonth.setAttribute("aria-selected", viewMode === "month" ? "true" : "false");
+        }
+
+        function updateNavAria() {
+          if (viewMode === "day") {
+            btnPrev.setAttribute("aria-label", "Previous day");
+            btnNext.setAttribute("aria-label", "Next day");
+          } else if (viewMode === "week") {
+            btnPrev.setAttribute("aria-label", "Previous week");
+            btnNext.setAttribute("aria-label", "Next week");
+          } else {
+            btnPrev.setAttribute("aria-label", "Previous month");
+            btnNext.setAttribute("aria-label", "Next month");
+          }
+        }
+
+        function formatTitle() {
+          if (viewMode === "day") {
+            var dt0 = new Date(Date.UTC(cursor.y, cursor.m, cursor.d));
+            return weekdayNames[dt0.getUTCDay()] + ", " + monthNames[cursor.m] + " " + cursor.d + ", " + cursor.y;
+          }
+          if (viewMode === "week") {
+            var sw = startOfWeekUTC(cursor.y, cursor.m, cursor.d);
+            var ew = addDaysUTC(sw.y, sw.m, sw.d, 6);
+            if (sw.y === ew.y && sw.m === ew.m) {
+              return monthNamesShort[sw.m] + " " + sw.d + " – " + ew.d + ", " + sw.y;
+            }
+            if (sw.y === ew.y) {
+              return (
+                monthNamesShort[sw.m] +
+                " " +
+                sw.d +
+                " – " +
+                monthNamesShort[ew.m] +
+                " " +
+                ew.d +
+                ", " +
+                sw.y
+              );
+            }
+            return (
+              monthNamesShort[sw.m] +
+              " " +
+              sw.d +
+              ", " +
+              sw.y +
+              " – " +
+              monthNamesShort[ew.m] +
+              " " +
+              ew.d +
+              ", " +
+              ew.y
+            );
+          }
+          return monthNames[cursor.m] + " " + cursor.y;
+        }
+
+        function escapeHtml(s) {
+          var d = document.createElement("div");
+          d.textContent = s;
+          return d.innerHTML;
+        }
+
+        function chip(r) {
+          var b = document.createElement("button");
+          b.type = "button";
+          b.className = "cal-chip";
+          b.innerHTML =
+            "<small>" +
+            escapeHtml(timeStr(r.starts_at)) +
+            "</small> · " +
+            escapeHtml((r.guest_name || "").split(" ")[0] || "Guest") +
+            escapeHtml(seatingChipSuffix(r));
+          b.addEventListener("click", function () {
+            openDetail(r);
+          });
+          return b;
+        }
+
+        function renderCell(dayNum, y, m, otherMonth, todayKey, maxShow) {
+          var key = ymd(y, m, dayNum);
+          var cell = document.createElement("div");
+          cell.className = "cal-cell" + (otherMonth ? " other-month" : "");
+          if (key === todayKey) cell.classList.add("today");
+
+          var num = document.createElement("div");
+          num.className = "cal-day-num";
+          num.textContent = String(dayNum);
+          cell.appendChild(num);
+
+          var evWrap = document.createElement("div");
+          evWrap.className = "cal-events";
+          var list = byDay[key] || [];
+          for (var j = 0; j < Math.min(list.length, maxShow); j++) {
+            evWrap.appendChild(chip(list[j]));
+          }
+          if (list.length > maxShow) {
+            var more = document.createElement("div");
+            more.style.fontSize = "0.58rem";
+            more.style.color = "var(--muted)";
+            more.style.fontWeight = "600";
+            more.textContent = "+" + (list.length - maxShow) + " more";
+            evWrap.appendChild(more);
+          }
+          cell.appendChild(evWrap);
+          grid.appendChild(cell);
+        }
+
+        function renderMonth() {
+          var viewYear = cursor.y;
+          var viewMonth = cursor.m;
+          var first = new Date(Date.UTC(viewYear, viewMonth, 1));
+          var startDow = first.getUTCDay();
+          var daysInMonth = new Date(Date.UTC(viewYear, viewMonth + 1, 0)).getUTCDate();
+          var prevMonthDays = new Date(Date.UTC(viewYear, viewMonth, 0)).getUTCDate();
+
+          grid.innerHTML = "";
+          var dows = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+          dows.forEach(function (d) {
+            var h = document.createElement("div");
+            h.className = "cal-dow";
+            h.textContent = d;
+            grid.appendChild(h);
+          });
+
+          var tn = new Date();
+          var tnp = wallDatePartsInTz(tn, DISPLAY_TZ);
+          var todayKey = ymd(tnp.y, tnp.m, tnp.d);
+
+          var cellCount = 0;
+          var i;
+          for (i = 0; i < startDow; i++) {
+            var pd = prevMonthDays - startDow + i + 1;
+            var py = viewMonth === 0 ? viewYear - 1 : viewYear;
+            var pm = viewMonth === 0 ? 11 : viewMonth - 1;
+            renderCell(pd, py, pm, true, todayKey, 3);
+            cellCount++;
+          }
+          for (i = 1; i <= daysInMonth; i++) {
+            renderCell(i, viewYear, viewMonth, false, todayKey, 3);
+            cellCount++;
+          }
+          var nextFill = 42 - cellCount;
+          if (nextFill < 0) nextFill = 0;
+          var ny = viewMonth === 11 ? viewYear + 1 : viewYear;
+          var nm = viewMonth === 11 ? 0 : viewMonth + 1;
+          for (i = 1; i <= nextFill; i++) {
+            renderCell(i, ny, nm, true, todayKey, 3);
+          }
+        }
+
+        function renderWeek() {
+          var sw = startOfWeekUTC(cursor.y, cursor.m, cursor.d);
+          grid.innerHTML = "";
+          var dows = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+          dows.forEach(function (d) {
+            var h = document.createElement("div");
+            h.className = "cal-dow";
+            h.textContent = d;
+            grid.appendChild(h);
+          });
+          var tn = new Date();
+          var tnp = wallDatePartsInTz(tn, DISPLAY_TZ);
+          var todayKey = ymd(tnp.y, tnp.m, tnp.d);
+          for (var i = 0; i < 7; i++) {
+            var day = addDaysUTC(sw.y, sw.m, sw.d, i);
+            renderCell(day.d, day.y, day.m, false, todayKey, 6);
+          }
+        }
+
+        function buildDayRow(r, options) {
+          options = options || {};
+          var queuePos = options.queuePos;
+          var isWaitlistSection = !!options.isWaitlistSection;
+          var dr = document.createElement("div");
+          dr.className = "day-slot";
+          dr.setAttribute("role", "button");
+          dr.tabIndex = 0;
+          dr.style.cursor = "pointer";
+          var tm = document.createElement("time");
+          tm.textContent = timeStr(r.starts_at);
+          var body = document.createElement("div");
+          body.className = "day-slot-body";
+          var titleBits =
+            (queuePos != null
+              ? '<span class="day-queue-pos" title="Waitlist position">#' + escapeHtml(String(queuePos)) + "</span>"
+              : "") +
+            escapeHtml(r.guest_name || "");
+          if (isWaitlistSection && effectiveVipTier(r)) {
+            titleBits +=
+              ' <span class="badge-vip-wl" title="VIP priority or pre-order at/above configured tier">VIP</span>';
+          }
+          body.innerHTML =
+            '<div class="day-slot-title">' +
+            titleBits +
+            "</div>" +
+            '<div class="day-slot-meta">' +
+            escapeHtml(String(r.party_size)) +
+            " guests · " +
+            escapeHtml(r.confirmation_code) +
+            ' · <span class="badge ' +
+            badgeClass(r.status) +
+            '">' +
+            escapeHtml(r.status) +
+            "</span>" +
+            seatingDayListBadge(r) +
+            "</div>";
+          dr.appendChild(tm);
+          dr.appendChild(body);
+          function open() {
+            openDetail(r);
+          }
+          dr.addEventListener("click", open);
+          dr.addEventListener("keydown", function (e) {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              open();
+            }
+          });
+          return dr;
+        }
+
+        function renderDay() {
+          var key = ymd(cursor.y, cursor.m, cursor.d);
+          dayViewHead.textContent = formatTitle();
+          dayViewBooked.innerHTML = "";
+          dayViewWaitlist.innerHTML = "";
+          var list = byDay[key] || [];
+          if (!list.length) {
+            var empty = document.createElement("div");
+            empty.className = "day-slot-empty";
+            empty.textContent = "No reservations on this day (Pacific).";
+            dayViewBooked.appendChild(empty);
+            daySectionWaitlist.hidden = true;
+            return;
+          }
+          var booked = [];
+          var wl = [];
+          list.forEach(function (r) {
+            if ((r.seating_status || "") === "waitlist") wl.push(r);
+            else booked.push(r);
+          });
+          booked.sort(function (a, b) {
+            return new Date(a.starts_at) - new Date(b.starts_at);
+          });
+          wl.sort(waitlistSortCompare);
+
+          if (!booked.length) {
+            var emptyB = document.createElement("div");
+            emptyB.className = "day-slot-empty";
+            emptyB.textContent = "No table-assigned or off-waitlist bookings this day.";
+            dayViewBooked.appendChild(emptyB);
+          } else {
+            booked.forEach(function (r) {
+              dayViewBooked.appendChild(buildDayRow(r, {}));
+            });
+          }
+
+          if (!wl.length) {
+            daySectionWaitlist.hidden = true;
+          } else {
+            daySectionWaitlist.hidden = false;
+            wl.forEach(function (r, i) {
+              dayViewWaitlist.appendChild(buildDayRow(r, { queuePos: i + 1, isWaitlistSection: true }));
+            });
+          }
+        }
+
+        function render() {
+          syncTabs();
+          updateNavAria();
+          labelEl.textContent = formatTitle();
+          if (viewMode === "day") {
+            grid.style.display = "none";
+            dayView.style.display = "";
+            grid.setAttribute("aria-hidden", "true");
+            dayView.removeAttribute("hidden");
+            renderDay();
+          } else {
+            grid.style.display = "";
+            dayView.style.display = "none";
+            grid.removeAttribute("aria-hidden");
+            dayView.setAttribute("hidden", "");
+            grid.className = "cal-grid " + (viewMode === "week" ? "cal-grid--week" : "cal-grid--month");
+            if (viewMode === "week") renderWeek();
+            else renderMonth();
+          }
+          saveCursor(cursor);
+        }
+
+        function row(label, html) {
+          var wrap = document.createElement("div");
+          wrap.className = "detail-row";
+          wrap.innerHTML = "<span>" + escapeHtml(label) + "</span><div>" + html + "</div>";
+          return wrap;
+        }
+
+        function openDetail(r) {
+          detailTitle.textContent = r.guest_name || "Reservation";
+          detailBody.innerHTML = "";
+          detailBody.appendChild(
+            row(
+              "Code",
+              "<code>" + escapeHtml(r.confirmation_code) + "</code> · id " + escapeHtml(String(r.id))
+            )
+          );
+          detailBody.appendChild(row("Status", '<span class="badge ' + badgeClass(r.status) + '">' + escapeHtml(r.status) + "</span>"));
+          detailBody.appendChild(row("Guest", escapeHtml(r.guest_name)));
+          detailBody.appendChild(row("Phone", escapeHtml(r.guest_phone)));
+          detailBody.appendChild(row("Party", escapeHtml(String(r.party_size))));
+          detailBody.appendChild(row("Time", escapeHtml(r.starts_at_display || r.starts_at)));
+
+          var seat = r.seating_status || "not_applicable";
+          var seatLbl =
+            seat === "waitlist"
+              ? "Waitlist (no table yet)"
+              : seat === "allocated"
+                ? "Table allocated"
+                : seat === "not_applicable"
+                  ? "N/A (allocation off or legacy row)"
+                  : seat;
+          detailBody.appendChild(
+            row(
+              "Seating",
+              '<span class="badge ' +
+                seatingBadgeClass(seat) +
+                '">' +
+                escapeHtml(seatLbl) +
+                "</span>"
+            )
+          );
+          var prioLabel = effectiveVipTier(r)
+            ? '<span class="badge badge-pending">VIP tier</span>'
+            : escapeHtml("standard");
+          detailBody.appendChild(row("Priority", prioLabel));
+          var tab = r.tables_allocated;
+          var tabStr =
+            tab && tab.length
+              ? "<code>" + escapeHtml(tab.join("+")) + "</code> · table size(s)"
+              : '<span style="color:var(--muted)">—</span>';
+          detailBody.appendChild(row("Tables", tabStr));
+
+          var preHtml = "";
+          if (r.preorder_items && r.preorder_items.length) {
+            preHtml = '<ul class="food-lines">';
+            r.preorder_items.forEach(function (line) {
+              var name = line.name_en || line.menu_item_id || "Item";
+              preHtml +=
+                "<li>" +
+                escapeHtml(name) +
+                " × " +
+                escapeHtml(String(line.quantity)) +
+                " · " +
+                escapeHtml(money(line.line_total_cents || 0)) +
+                "</li>";
+            });
+            preHtml += "</ul>";
+            preHtml +=
+              "<p style='margin-top:0.5rem;font-size:0.82rem'>Total <strong>" +
+              escapeHtml(money(r.food_total_cents || 0)) +
+              "</strong> <span style='color:var(--muted)'>(sub " +
+              escapeHtml(money(r.food_subtotal_cents || 0)) +
+              ", disc −" +
+              escapeHtml(money(r.preorder_discount_cents || 0)) +
+              ")</span></p>";
+          } else {
+            preHtml = "<span style='color:var(--muted)'>No pre-order</span>";
+          }
+          detailBody.appendChild(row("Pre-order", preHtml));
+
+          var notes = r.special_requests
+            ? escapeHtml(r.special_requests)
+            : '<span style="color:var(--muted)">—</span>';
+          detailBody.appendChild(row("Notes", notes));
+          detailBody.appendChild(row("Source", "<code>" + escapeHtml(r.source_channel) + "</code>"));
+          var rem = r.reminder_call_status
+            ? escapeHtml(r.reminder_call_status)
+            : '<span style="color:var(--muted)">—</span>';
+          detailBody.appendChild(row("Reminder", rem));
+
+          overlay.classList.add("open");
+          overlay.setAttribute("aria-hidden", "false");
+        }
+
+        function closeDetail() {
+          overlay.classList.remove("open");
+          overlay.setAttribute("aria-hidden", "true");
+        }
+
+        btnPrev.addEventListener("click", function () {
+          if (viewMode === "day") cursor = addDaysUTC(cursor.y, cursor.m, cursor.d, -1);
+          else if (viewMode === "week") cursor = addDaysUTC(cursor.y, cursor.m, cursor.d, -7);
+          else cursor = addMonthsUTC(cursor.y, cursor.m, cursor.d, -1);
+          render();
+        });
+        btnNext.addEventListener("click", function () {
+          if (viewMode === "day") cursor = addDaysUTC(cursor.y, cursor.m, cursor.d, 1);
+          else if (viewMode === "week") cursor = addDaysUTC(cursor.y, cursor.m, cursor.d, 7);
+          else cursor = addMonthsUTC(cursor.y, cursor.m, cursor.d, 1);
+          render();
+        });
+        btnToday.addEventListener("click", function () {
+          cursor = todayCursor();
+          render();
+        });
+
+        tabDay.addEventListener("click", function () {
+          viewMode = "day";
+          saveViewMode("day");
+          render();
+        });
+        tabWeek.addEventListener("click", function () {
+          viewMode = "week";
+          saveViewMode("week");
+          render();
+        });
+        tabMonth.addEventListener("click", function () {
+          viewMode = "month";
+          saveViewMode("month");
+          render();
+        });
+
+        document.getElementById("detail-close").addEventListener("click", closeDetail);
+        overlay.addEventListener("click", function (e) {
+          if (e.target === overlay) closeDetail();
+        });
+        document.addEventListener("keydown", function (e) {
+          if (e.key === "Escape") closeDetail();
+        });
+
+        render();
+      })();
+    </script>
+  </body>
+</html>
