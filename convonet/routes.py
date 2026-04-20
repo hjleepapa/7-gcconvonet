@@ -81,9 +81,12 @@ def _filter_mcp_servers_for_runtime(mcp_servers: dict) -> dict:
         return servers
 
     project_root = os.path.dirname(os.path.dirname(__file__))
-    kfood_dir = os.path.join(project_root, "kfood")
-    if os.path.isdir(kfood_dir) and kfood_dir not in sys.path:
-        sys.path.insert(0, kfood_dir)
+    for extra in (
+        os.path.join(project_root, "kfood"),
+        project_root,
+    ):
+        if os.path.isdir(extra) and extra not in sys.path:
+            sys.path.insert(0, extra)
     try:
         import importlib
 

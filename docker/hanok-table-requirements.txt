@@ -1,0 +1,8 @@
+# Vendored Hanok Table app (repo root ./hanok_table). Pins aligned with requirements-full.txt where practical.
+fastapi==0.115.12
+uvicorn[standard]>=0.30.0,<0.35
+sqlalchemy==2.0.36
+psycopg2-binary==2.9.10
+httpx==0.28.1
+python-dotenv==1.0.1
+mcp>=1.9.0

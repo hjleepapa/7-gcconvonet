@@ -86,8 +86,11 @@ Then open the call-center UI at `http://localhost:8002/` (landing). For voice, p
 ### Deploy to Google Cloud Run
 
 ```bash
-# Deploy all four services
+# Deploy all five services (includes hanok-table-service if ./hanok_table/ is populated — see hanok_table/README.md)
 gcloud builds submit --config cloudbuild.yaml .
+
+# Deploy only Hanok Table (5th microservice)
+gcloud builds submit --config cloudbuild-hanok-table.yaml --substitutions=_COMMIT_SHA=latest .
 
 # Deploy only voice-gateway + call-center
 gcloud builds submit --config cloudbuild-voice-callcenter.yaml .
@@ -109,6 +112,7 @@ Set env vars once per service in Cloud Run (Console → service → Edit & deplo
 | **agent-llm-service** | LangGraph agent, `POST /agent/process`, provider APIs | `convonet/agent_llm_service.py` |
 | **call-center-service** | Landing, call center UI, voice/mortgage/agent-monitor/tool-execution pages | `convonet/call_center_service.py` |
 | **crm-integration-service** | SuiteCRM, patient/meeting/case/note APIs | `convonet/crm_integration_service.py` |
+| **hanok-table-service** | Hanok reservations REST + webhooks (vendored `hanok_table/`) | `hanok_table/app.py` (uvicorn in `docker/hanok-table.Dockerfile`) |
 
 All services listen on **port 8080** in the container. They can be exposed under a **single domain** (e.g. `https://v2.convonetai.com`) with path-based routing.
 
