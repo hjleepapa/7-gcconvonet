@@ -1,3 +1,6 @@
+# Optional local Hanok sources for MCP import (never commit; Hanok ships from its own repo).
+kfood/
+
 .env
 .env.cloudrun
 .env.*.local

@@ -2,9 +2,9 @@
 MCP stdio entry for Hanok Table (kfood) reservation tools.
 
 Requires HANOK_MCP_API_BASE_URL (or HANOK_PUBLIC_BASE_URL) on **agent-llm-service** pointing at the
-Hanok FastAPI base URL (e.g. https://hanok.convonetai.com) that serves /api/reservations
-(see kfood/hanok_table/app.py). Hanok usually runs as a **separate Cloud Run service** built
-from docker/hanok-table.Dockerfile.
+deployed Hanok FastAPI base URL (e.g. https://hanok.convonetai.com) that serves /api/reservations.
+The Hanok app is deployed from its **own repository / CI**, not from 7-gcconvonet. This stdio
+entry still needs the ``hanok_table`` Python package importable in the agent-llm environment.
 """
 import os
 import sys

@@ -41,9 +41,6 @@ Convonet is a production-ready voice AI productivity system that combines **Lang
 git clone https://github.com/hjleepapa/7-gcconvonet.git
 cd 7-gcconvonet
 
-# Hanok Table / kfood (submodule → github.com/hjleepapa/8-telnyx). Required for Hanok MCP + hanok-table Docker image.
-git submodule update --init kfood
-
 # Install dependencies
 pip install -r requirements.txt
 

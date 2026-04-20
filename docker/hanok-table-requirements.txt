@@ -1,9 +1,0 @@
-# Hanok Table (kfood/hanok_table) — minimal runtime for Cloud Run.
-# Aligned with main repo pins where practical (see requirements-full.txt).
-fastapi==0.115.12
-uvicorn[standard]>=0.30.0,<0.35
-sqlalchemy==2.0.36
-psycopg2-binary==2.9.10
-httpx==0.28.1
-python-dotenv==1.0.1
-mcp>=1.9.0

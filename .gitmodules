@@ -1,4 +1,0 @@
-[submodule "kfood"]
-	path = kfood
-	url = https://github.com/hjleepapa/8-telnyx.git
-	branch = main

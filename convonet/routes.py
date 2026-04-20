@@ -52,8 +52,10 @@ logger = logging.getLogger(__name__)
 def _filter_mcp_servers_for_runtime(mcp_servers: dict) -> dict:
     """
     Remove optional MCP servers that would crash on subprocess start.
-    Hanok Table depends on the kfood submodule; if it is missing or env is unset,
-    the hanok stdio server fails and langchain_mcp_adapters fails get_tools() for ALL servers.
+    Hanok reservation *HTTP* API may run on another host (see HANOK_MCP_API_BASE_URL), but the
+    hanok_table *stdio* MCP entry still needs the ``hanok_table`` Python package importable in
+    this image (e.g. optional local ``kfood/`` on PYTHONPATH — not tracked in git). If the
+    package is missing, exclude the server so get_tools() does not fail for all MCP servers.
     """
     if not isinstance(mcp_servers, dict):
         return mcp_servers
