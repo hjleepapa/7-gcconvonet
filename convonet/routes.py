@@ -6,6 +6,7 @@ from typing import Optional
 import asyncio
 import json
 import os
+import sys
 import logging
 import time
 import requests
@@ -46,6 +47,50 @@ import uuid
 
 # Set up logging
 logger = logging.getLogger(__name__)
+
+
+def _filter_mcp_servers_for_runtime(mcp_servers: dict) -> dict:
+    """
+    Remove optional MCP servers that would crash on subprocess start.
+    Hanok Table depends on the kfood submodule; if it is missing or env is unset,
+    the hanok stdio server fails and langchain_mcp_adapters fails get_tools() for ALL servers.
+    """
+    if not isinstance(mcp_servers, dict):
+        return mcp_servers
+    servers = dict(mcp_servers)
+    if "hanok_table" not in servers:
+        return servers
+
+    if os.getenv("HANOK_MCP_DISABLE", "").strip().lower() in ("1", "true", "yes"):
+        servers.pop("hanok_table", None)
+        print("🔧 MCP: excluded hanok_table server (HANOK_MCP_DISABLE)", flush=True)
+        return servers
+
+    hanok_url = (
+        os.getenv("HANOK_MCP_API_BASE_URL", "").strip()
+        or os.getenv("HANOK_PUBLIC_BASE_URL", "").strip()
+    )
+    if not hanok_url:
+        servers.pop("hanok_table", None)
+        print(
+            "🔧 MCP: excluded hanok_table server (no HANOK_MCP_API_BASE_URL or HANOK_PUBLIC_BASE_URL)",
+            flush=True,
+        )
+        return servers
+
+    project_root = os.path.dirname(os.path.dirname(__file__))
+    kfood_dir = os.path.join(project_root, "kfood")
+    if os.path.isdir(kfood_dir) and kfood_dir not in sys.path:
+        sys.path.insert(0, kfood_dir)
+    try:
+        import importlib
+
+        importlib.import_module("hanok_table.mcp_server.server")
+    except ImportError as exc:
+        servers.pop("hanok_table", None)
+        print(f"🔧 MCP: excluded hanok_table server (package unavailable: {exc})", flush=True)
+    return servers
+
 
 # Global agent graph cache (initialized on first use)
 _agent_graph_cache = None
@@ -1200,6 +1245,7 @@ async def _preload_mcp_tools():
             
             with open(config_path) as f:
                 mcp_config = json.load(f)
+            mcp_config["mcpServers"] = _filter_mcp_servers_for_runtime(mcp_config.get("mcpServers", {}))
             
             # Set working directory to project root for MCP servers
             project_root = os.path.dirname(os.path.dirname(__file__))
@@ -1432,6 +1478,7 @@ async def _get_agent_graph(
 
         with open(config_path) as f:
             mcp_config = json.load(f)
+        mcp_config["mcpServers"] = _filter_mcp_servers_for_runtime(mcp_config.get("mcpServers", {}))
         
         # Set working directory to project root for MCP servers
         # __file__ is: /Users/hj/Web Development Projects/1. Main/convonet/routes.py
@@ -2213,6 +2260,13 @@ async def _run_agent_async(
             error="Agent graph initialization timeout",
             metadata=track_metadata
         )
+        if include_metadata:
+            return {
+                "response": error_msg,
+                "transfer_marker": None,
+                "provider_used": None,
+                "model_used": None,
+            }
         return error_msg
     except Exception as e:
         print(f"❌ Failed to initialize agent: {e}")
@@ -2231,8 +2285,24 @@ async def _run_agent_async(
         if any(keyword in lower_prompt for keyword in transfer_keywords):
             reason = "Automated transfer triggered due to assistant service interruption"
             print(f"🔄 Fallback transfer to extension {fallback_extension} ({fallback_department}) because agent initialization failed.")
-            return f"TRANSFER_INITIATED:{fallback_extension}|{fallback_department}|{reason}"
-        return "I'm sorry, there's a temporary system issue. Please try again in a moment."
+            marker = f"TRANSFER_INITIATED:{fallback_extension}|{fallback_department}|{reason}"
+            if include_metadata:
+                return {
+                    "response": "I'll connect you to a human agent now.",
+                    "transfer_marker": marker,
+                    "provider_used": None,
+                    "model_used": None,
+                }
+            return marker
+        fallback_msg = "I'm sorry, there's a temporary system issue. Please try again in a moment."
+        if include_metadata:
+            return {
+                "response": fallback_msg,
+                "transfer_marker": None,
+                "provider_used": None,
+                "model_used": None,
+            }
+        return fallback_msg
 
     # For domain-specific agents, inject authenticated_user_id into the prompt context
     # so the LLM knows the actual UUID value to use for tool calls
