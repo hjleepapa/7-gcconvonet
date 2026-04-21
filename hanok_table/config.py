@@ -76,6 +76,17 @@ def hanok_reservation_wall_clock_timezone():
     return ZoneInfo(raw)
 
 
+def convonet_voice_assistant_url() -> str | None:
+    """HTTPS URL for the Convonet WebRTC voice UI (call-center ``/voice_assistant``).
+
+    Set ``CONVONET_VOICE_ASSISTANT_URL`` on hanok-table-service, e.g.
+    ``https://call-center-….run.app/voice_assistant`` or your custom domain.
+    Falls back to ``VOICE_ASSISTANT_URL`` (same name as call-center landing).
+    """
+    v = (os.environ.get("CONVONET_VOICE_ASSISTANT_URL") or os.environ.get("VOICE_ASSISTANT_URL") or "").strip()
+    return v or None
+
+
 def hanok_public_base_url() -> str | None:
     """Public HTTPS origin for Telnyx webhooks (no trailing slash), e.g. https://telnyx.convonetai.com."""
     v = (

@@ -3,6 +3,7 @@
 import logging
 import os
 from contextlib import asynccontextmanager
+from html import escape
 from pathlib import Path
 
 from fastapi import FastAPI, Query
@@ -11,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from hanok_table.config import (
     admin_dashboard_token,
+    convonet_voice_assistant_url,
     hanok_mcp_http_mount_enabled,
     hanok_mcp_http_mount_path,
     hanok_public_base_url,
@@ -108,6 +110,19 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+def _voice_cta_attributes() -> str:
+    """Attributes for the Convonet WebRTC CTA: real link when env is set, else disabled stub."""
+    url = convonet_voice_assistant_url()
+    if url:
+        safe = escape(url, quote=True)
+        return f'href="{safe}" target="_blank" rel="noopener noreferrer"'
+    return (
+        'href="#" onclick="return false;" aria-disabled="true" '
+        'style="opacity:0.72;cursor:not-allowed" '
+        'title="Set CONVONET_VOICE_ASSISTANT_URL on this service (your call-center /voice_assistant URL)."'
+    )
+
+
 def _home_page_html() -> str:
     if not _INDEX.is_file():
         logger.error("Missing Hanok landing page: %s (static dir: %s)", _INDEX, _STATIC)
@@ -118,7 +133,8 @@ def _home_page_html() -> str:
             "<p>Redeploy from GitHub so <code>hanok_table/static/index.html</code> is on the server.</p>"
             "</body></html>"
         )
-    return _INDEX.read_text(encoding="utf-8")
+    raw = _INDEX.read_text(encoding="utf-8")
+    return raw.replace("__HANOK_VOICE_CTA_ATTRS__", _voice_cta_attributes())
 
 
 @app.get("/", response_class=HTMLResponse)
