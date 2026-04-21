@@ -54,6 +54,8 @@ steps:
       - '--region'
       - 'us-central1'
       - '--allow-unauthenticated'
+      # LangGraph + multiple MCP clients (SuiteCRM, Hanok, etc.) exceed 512 MiB during init; OOM → 503 / no voice reply.
+      - '--memory=2Gi'
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     id: deploy-call-center
     entrypoint: gcloud
