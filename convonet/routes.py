@@ -7,6 +7,7 @@ import asyncio
 import json
 import os
 import sys
+import re
 import logging
 import time
 import requests
@@ -2106,6 +2107,96 @@ async def _run_agent_async(
     has_mortgage_intent = detect_mortgage_intent(prompt)
     has_healthcare_intent = detect_healthcare_intent(prompt)
     has_hanok_table_intent = detect_hanok_table_intent(prompt)
+    normalized_prompt = re.sub(r"[^a-z0-9]+", " ", prompt_text).strip()
+
+    # Hard fallback: reservation cancellation/change requests should always route to Hanok,
+    # even when STT punctuation/order causes keyword detection misses.
+    reservation_change_fallback = (
+        ("reservation" in normalized_prompt or "reservations" in normalized_prompt)
+        and bool(re.search(r"\b(cancel|change|modify|reschedule|update)\b", normalized_prompt))
+    )
+    if reservation_change_fallback and not has_hanok_table_intent:
+        has_hanok_table_intent = True
+        has_mortgage_intent = False
+        has_healthcare_intent = False
+        print(
+            f"🍽️ Hanok fallback intent: matched reservation+cancel/change in prompt {normalized_prompt!r}",
+            flush=True,
+        )
+
+    # Additional fallback: route to Hanok when user provides restaurant-reservation details
+    # (name/phone/confirmation code), even if STT drops cancel/change verbs.
+    has_restaurant_reservation_phrase = (
+        "restaurant reservation" in normalized_prompt
+        or ("restaurant" in normalized_prompt and ("reservation" in normalized_prompt or "reservations" in normalized_prompt))
+    )
+    has_name_field = bool(re.search(r"\b(my name is|name is|name)\b", normalized_prompt))
+    has_code_field = bool(re.search(r"\b(confirmation code|code|hnk)\b", normalized_prompt))
+    phone_digits = "".join(re.findall(r"\d", prompt_text))
+    has_phone_field = len(phone_digits) >= 10 or bool(
+        re.search(r"\b(phone|phone number|number|contact)\b", normalized_prompt)
+    )
+    reservation_identity_fallback = has_restaurant_reservation_phrase and (
+        has_name_field or has_phone_field or has_code_field
+    )
+    if reservation_identity_fallback and not has_hanok_table_intent:
+        has_hanok_table_intent = True
+        has_mortgage_intent = False
+        has_healthcare_intent = False
+        print(
+            "🍽️ Hanok fallback intent: matched restaurant reservation + identifying fields "
+            f"(name={has_name_field}, phone={has_phone_field}, code={has_code_field}) "
+            f"in prompt {normalized_prompt!r}",
+            flush=True,
+        )
+
+    # STT-safe fallback: restaurant reservation + date/time + party-size should always
+    # route to Hanok, even if intent keywords are fragmented.
+    has_restaurant_keyword = "restaurant" in normalized_prompt
+    has_reservation_keyword = bool(re.search(r"\b(reservation|reservations|booking|bookings|table)\b", normalized_prompt))
+    has_date_hint = bool(
+        re.search(
+            r"\b(today|tomorrow|tonight|monday|tuesday|wednesday|thursday|friday|saturday|sunday|"
+            r"jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|"
+            r"sep|sept|september|oct|october|nov|november|dec|december)\b",
+            normalized_prompt,
+        )
+    ) or bool(re.search(r"\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b", prompt_text))
+    has_time_hint = bool(
+        re.search(r"\b\d{1,2}(?::\d{2})?\s*(am|pm)\b", prompt_text)
+    ) or bool(re.search(r"\b(noon|midnight|dinner|lunch|breakfast)\b", normalized_prompt))
+    has_party_size_hint = bool(
+        re.search(r"\bparty of\s*\d+\b", normalized_prompt)
+        or re.search(r"\bfor\s+\d+\s*(people|persons|guests)\b", normalized_prompt)
+        or re.search(r"\b\d+\s*(people|persons|guests)\b", normalized_prompt)
+    )
+    restaurant_reservation_datetime_party_fallback = (
+        has_restaurant_keyword
+        and has_reservation_keyword
+        and has_date_hint
+        and has_time_hint
+        and has_party_size_hint
+    )
+    if restaurant_reservation_datetime_party_fallback and not has_hanok_table_intent:
+        has_hanok_table_intent = True
+        has_mortgage_intent = False
+        has_healthcare_intent = False
+        print(
+            "🍽️ Hanok fallback intent: matched restaurant reservation + date/time + party size "
+            f"(date={has_date_hint}, time={has_time_hint}, party={has_party_size_hint}) "
+            f"in prompt {normalized_prompt!r}",
+            flush=True,
+        )
+
+    # Strong routing rule: if caller mentions "restaurant", keep request in Hanok flow.
+    if has_restaurant_keyword and not has_hanok_table_intent:
+        has_hanok_table_intent = True
+        has_mortgage_intent = False
+        has_healthcare_intent = False
+        print(
+            f"🍽️ Hanok fallback intent: matched 'restaurant' keyword in prompt {normalized_prompt!r}",
+            flush=True,
+        )
     
     # Sticky domain context (keeps user in flow after initial intent)
     # Allow explicit todo intent to override sticky context.
@@ -3045,7 +3136,6 @@ VOICE OUTPUT FORMAT (CRITICAL):
             failed_model = None
             if "model:" in error_str.lower():
                 # Try to extract model name from error message
-                import re
                 model_match = re.search(r"model:\s*([^\s,}']+)", error_str, re.IGNORECASE)
                 if model_match:
                     failed_model = model_match.group(1).strip()
